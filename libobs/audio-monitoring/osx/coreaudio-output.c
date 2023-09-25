@@ -61,11 +61,9 @@ static void on_audio_playback(void *param, obs_source_t *source,
 	float vol = source->user_volume;
 	uint32_t bytes;
 
-	if (!os_atomic_load_bool(&monitor->active)) {
-		return;
-	}
+	UNUSED_PARAMETER(source);
 
-	if (os_atomic_load_long(&source->activate_refs) == 0) {
+	if (!os_atomic_load_bool(&monitor->active)) {
 		return;
 	}
 

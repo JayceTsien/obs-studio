@@ -13,9 +13,6 @@
   <property name="windowTitle">
    <string>Basic.Filters</string>
   </property>
-  <property name="sizeGripEnabled">
-   <bool>true</bool>
-  </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout" stretch="1,10">
@@ -68,9 +65,6 @@
             </property>
             <property name="contextMenuPolicy">
              <enum>Qt::CustomContextMenu</enum>
-            </property>
-            <property name="spacing">
-             <number>1</number>
             </property>
            </widget>
           </item>
@@ -281,9 +275,6 @@
             </property>
             <property name="contextMenuPolicy">
              <enum>Qt::CustomContextMenu</enum>
-            </property>
-            <property name="spacing">
-             <number>1</number>
             </property>
            </widget>
           </item>
@@ -572,9 +563,22 @@
            <enum>QLayout::SetMaximumSize</enum>
           </property>
           <item>
+           <spacer name="horizontalSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
            <widget class="QDialogButtonBox" name="buttonBox">
             <property name="standardButtons">
-             <set>QDialogButtonBox::Close|QDialogButtonBox::RestoreDefaults</set>
+             <set>QDialogButtonBox::Close|QDialogButtonBox::Reset</set>
             </property>
            </widget>
           </item>
@@ -596,9 +600,6 @@
    </property>
    <property name="shortcut">
     <string>Del</string>
-   </property>
-   <property name="iconVisibleInMenu">
-    <bool>false</bool>
    </property>
   </action>
   <action name="actionMoveUp">
@@ -623,11 +624,6 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Down</string>
-   </property>
-  </action>
-  <action name="actionRenameFilter">
-   <property name="text">
-    <string>Rename</string>
    </property>
   </action>
  </widget>

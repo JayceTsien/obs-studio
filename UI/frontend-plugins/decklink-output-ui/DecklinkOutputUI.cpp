@@ -86,12 +86,11 @@ void DecklinkOutputUI::SetupPreviewPropertiesView()
 
 void DecklinkOutputUI::SavePreviewSettings()
 {
-	BPtr<char> modulePath =
-		obs_module_get_config_path(obs_current_module(), "");
+	char *modulePath = obs_module_get_config_path(obs_current_module(), "");
 
 	os_mkdirs(modulePath);
 
-	BPtr<char> path = obs_module_get_config_path(
+	char *path = obs_module_get_config_path(
 		obs_current_module(), "decklinkPreviewOutputProps.json");
 
 	obs_data_t *settings = previewPropertiesView->GetSettings();

@@ -36,7 +36,6 @@ public:
 	OBSWeakSource weakSource;
 	std::string path;
 	QImage image;
-	std::vector<uint8_t> half_bytes;
 	uint32_t cx;
 	uint32_t cy;
 	std::thread th;

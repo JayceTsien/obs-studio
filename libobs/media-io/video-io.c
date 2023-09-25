@@ -69,6 +69,8 @@ struct video_output {
 	volatile long skipped_frames;
 	volatile long total_frames;
 
+	bool initialized;
+
 	pthread_mutex_t input_mutex;
 	DARRAY(struct video_input) inputs;
 
@@ -234,6 +236,7 @@ int video_output_open(video_t **video, struct video_output_info *info)
 	memcpy(&out->info, info, sizeof(struct video_output_info));
 	out->frame_time =
 		util_mul_div64(1000000000ULL, info->fps_den, info->fps_num);
+	out->initialized = false;
 
 	if (pthread_mutex_init_recursive(&out->data_mutex) != 0)
 		goto fail0;
@@ -246,6 +249,7 @@ int video_output_open(video_t **video, struct video_output_info *info)
 
 	init_cache(out);
 
+	out->initialized = true;
 	*video = out;
 	return VIDEO_OUTPUT_SUCCESS;
 
@@ -256,7 +260,7 @@ fail2:
 fail1:
 	pthread_mutex_destroy(&out->data_mutex);
 fail0:
-	bfree(out);
+	video_output_close(out);
 	return VIDEO_OUTPUT_FAIL;
 }
 
@@ -267,19 +271,12 @@ void video_output_close(video_t *video)
 
 	video_output_stop(video);
 
-	pthread_mutex_lock(&video->input_mutex);
-
 	for (size_t i = 0; i < video->inputs.num; i++)
 		video_input_free(&video->inputs.array[i]);
 	da_free(video->inputs);
 
 	for (size_t i = 0; i < video->info.cache_size; i++)
 		video_frame_free((struct video_frame *)&video->cache[i]);
-
-	pthread_mutex_unlock(&video->input_mutex);
-	os_sem_destroy(video->update_semaphore);
-	pthread_mutex_destroy(&video->data_mutex);
-	pthread_mutex_destroy(&video->input_mutex);
 
 	bfree(video);
 }
@@ -298,42 +295,12 @@ static size_t video_get_input_idx(const video_t *video,
 	return DARRAY_INVALID;
 }
 
-static bool match_range(enum video_range_type a, enum video_range_type b)
-{
-	return (a == VIDEO_RANGE_FULL) == (b == VIDEO_RANGE_FULL);
-}
-
-static enum video_colorspace collapse_space(enum video_colorspace cs)
-{
-	switch (cs) {
-	case VIDEO_CS_DEFAULT:
-	case VIDEO_CS_SRGB:
-		cs = VIDEO_CS_709;
-		break;
-	case VIDEO_CS_2100_HLG:
-		cs = VIDEO_CS_2100_PQ;
-		break;
-	default:
-		break;
-	}
-
-	return cs;
-}
-
-static bool match_space(enum video_colorspace a, enum video_colorspace b)
-{
-	return collapse_space(a) == collapse_space(b);
-}
-
 static inline bool video_input_init(struct video_input *input,
 				    struct video_output *video)
 {
 	if (input->conversion.width != video->info.width ||
 	    input->conversion.height != video->info.height ||
-	    input->conversion.format != video->info.format ||
-	    !match_range(input->conversion.range, video->info.range) ||
-	    !match_space(input->conversion.colorspace,
-			 video->info.colorspace)) {
+	    input->conversion.format != video->info.format) {
 		struct video_scale_info from = {.format = video->info.format,
 						.width = video->info.width,
 						.height = video->info.height,
@@ -395,8 +362,6 @@ bool video_output_connect(
 			input.conversion.format = video->info.format;
 			input.conversion.width = video->info.width;
 			input.conversion.height = video->info.height;
-			input.conversion.range = video->info.range;
-			input.conversion.colorspace = video->info.colorspace;
 		}
 
 		if (input.conversion.width == 0)
@@ -538,10 +503,14 @@ void video_output_stop(video_t *video)
 	if (!video)
 		return;
 
-	if (!video->stop) {
+	if (video->initialized) {
+		video->initialized = false;
 		video->stop = true;
 		os_sem_post(video->update_semaphore);
 		pthread_join(video->thread, &thread_ret);
+		os_sem_destroy(video->update_semaphore);
+		pthread_mutex_destroy(&video->data_mutex);
+		pthread_mutex_destroy(&video->input_mutex);
 	}
 }
 

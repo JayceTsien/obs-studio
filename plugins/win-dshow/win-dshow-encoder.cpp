@@ -161,6 +161,7 @@ static inline void *CreateDShowEncoder(obs_data_t *settings,
 		     obs_encoder_get_name(context), error);
 	}
 
+	UNUSED_PARAMETER(settings);
 	return encoder;
 }
 

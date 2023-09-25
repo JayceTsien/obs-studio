@@ -82,9 +82,9 @@ obs_output_t *DeckLinkOutput::GetOutput(void) const
 	return output;
 }
 
-void DeckLinkOutput::UpdateVideoFrame(video_data *frame)
+void DeckLinkOutput::DisplayVideoFrame(video_data *frame)
 {
-	instance->UpdateVideoFrame(frame);
+	instance->DisplayVideoFrame(frame);
 }
 
 void DeckLinkOutput::WriteAudio(audio_data *frames)

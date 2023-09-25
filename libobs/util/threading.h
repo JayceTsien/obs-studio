@@ -26,10 +26,12 @@
 
 #include "c99defs.h"
 
-#ifndef _MSC_VER
+#ifdef _MSC_VER
+#include "../../deps/w32-pthreads/pthread.h"
+#else
 #include <errno.h>
-#endif
 #include <pthread.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

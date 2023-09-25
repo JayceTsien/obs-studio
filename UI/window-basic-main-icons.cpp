@@ -32,8 +32,6 @@ QIcon OBSBasic::GetSourceIcon(const char *id) const
 	case OBS_ICON_TYPE_CUSTOM:
 		//TODO: Add ability for sources to define custom icons
 		return GetDefaultIcon();
-	case OBS_ICON_TYPE_PROCESS_AUDIO_OUTPUT:
-		return GetAudioProcessOutputIcon();
 	default:
 		return GetDefaultIcon();
 	}
@@ -114,11 +112,6 @@ void OBSBasic::SetDefaultIcon(const QIcon &icon)
 	defaultIcon = icon;
 }
 
-void OBSBasic::SetAudioProcessOutputIcon(const QIcon &icon)
-{
-	audioProcessOutputIcon = icon;
-}
-
 QIcon OBSBasic::GetImageIcon() const
 {
 	return imageIcon;
@@ -192,9 +185,4 @@ QIcon OBSBasic::GetSceneIcon() const
 QIcon OBSBasic::GetDefaultIcon() const
 {
 	return defaultIcon;
-}
-
-QIcon OBSBasic::GetAudioProcessOutputIcon() const
-{
-	return audioProcessOutputIcon;
 }

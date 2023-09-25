@@ -18,7 +18,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "jack-wrapper.h"
 
 #include <obs-module.h>
-#include <util/dstr.h>
 
 /**
  * Returns the name of the plugin
@@ -77,13 +76,8 @@ static void jack_update(void *vptr, obs_data_t *settings)
 	if (!data->device || strcmp(data->device, new_device) != 0) {
 		if (data->device)
 			bfree(data->device);
-		/* prefix all devices to make it clear that they belong to obs */
-		struct dstr device;
-		dstr_init(&device);
-		dstr_catf(&device, "OBS Studio: %s", new_device);
-		data->device = bstrdup(device.array);
+		data->device = bstrdup(new_device);
 		settings_changed = true;
-		dstr_free(&device);
 	}
 
 	if (settings_changed) {

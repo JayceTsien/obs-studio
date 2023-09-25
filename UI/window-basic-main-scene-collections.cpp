@@ -157,13 +157,9 @@ bool OBSBasic::AddSceneCollection(bool create_new, const QString &qname)
 				  "SceneCollection", name.c_str());
 		config_set_string(App()->GlobalConfig(), "Basic",
 				  "SceneCollectionFile", file.c_str());
-
 		if (create_new) {
 			CreateDefaultScene(false);
-		} else {
-			obs_reset_source_uuids();
 		}
-
 		SaveProjectNow();
 		RefreshSceneCollections();
 	};
@@ -280,6 +276,9 @@ void OBSBasic::on_actionRenameSceneCollection_triggered()
 		return;
 	}
 
+	if (api)
+		api->on_event(OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING);
+
 	oldFile.insert(0, path);
 	oldFile += ".json";
 	os_unlink(oldFile.c_str());
@@ -294,8 +293,10 @@ void OBSBasic::on_actionRenameSceneCollection_triggered()
 	UpdateTitleBar();
 	RefreshSceneCollections();
 
-	if (api)
-		api->on_event(OBS_FRONTEND_EVENT_SCENE_COLLECTION_RENAMED);
+	if (api) {
+		api->on_event(OBS_FRONTEND_EVENT_SCENE_COLLECTION_LIST_CHANGED);
+		api->on_event(OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED);
+	}
 }
 
 void OBSBasic::on_actionRemoveSceneCollection_triggered()
@@ -324,8 +325,8 @@ void OBSBasic::on_actionRemoveSceneCollection_triggered()
 	if (newPath.empty())
 		return;
 
-	QString text =
-		QTStr("ConfirmRemove.Text").arg(QT_UTF8(oldName.c_str()));
+	QString text = QTStr("ConfirmRemove.Text");
+	text.replace("$1", QT_UTF8(oldName.c_str()));
 
 	QMessageBox::StandardButton button = OBSMessageBox::question(
 		this, QTStr("ConfirmRemove.Title"), text);
@@ -371,8 +372,10 @@ void OBSBasic::on_actionRemoveSceneCollection_triggered()
 
 void OBSBasic::on_actionImportSceneCollection_triggered()
 {
-	OBSImporter imp(this);
-	imp.exec();
+	OBSImporter *imp;
+	imp = new OBSImporter(this);
+	imp->exec();
+	delete imp;
 
 	RefreshSceneCollections();
 }
@@ -401,46 +404,10 @@ void OBSBasic::on_actionExportSceneCollection_triggered()
 	string file = QT_TO_UTF8(exportFile);
 
 	if (!exportFile.isEmpty() && !exportFile.isNull()) {
-		QString inputFile = path + currentFile + ".json";
+		if (QFile::exists(exportFile))
+			QFile::remove(exportFile);
 
-		OBSDataAutoRelease collection =
-			obs_data_create_from_json_file(QT_TO_UTF8(inputFile));
-
-		OBSDataArrayAutoRelease sources =
-			obs_data_get_array(collection, "sources");
-		if (!sources) {
-			blog(LOG_WARNING,
-			     "No sources in exported scene collection");
-			return;
-		}
-		obs_data_erase(collection, "sources");
-
-		// We're just using std::sort on a vector to make life easier.
-		vector<OBSData> sourceItems;
-		obs_data_array_enum(
-			sources,
-			[](obs_data_t *data, void *pVec) -> void {
-				auto &sourceItems =
-					*static_cast<vector<OBSData> *>(pVec);
-				sourceItems.push_back(data);
-			},
-			&sourceItems);
-
-		std::sort(sourceItems.begin(), sourceItems.end(),
-			  [](const OBSData &a, const OBSData &b) {
-				  return astrcmpi(obs_data_get_string(a,
-								      "name"),
-						  obs_data_get_string(
-							  b, "name")) < 0;
-			  });
-
-		OBSDataArrayAutoRelease newSources = obs_data_array_create();
-		for (auto &item : sourceItems)
-			obs_data_array_push_back(newSources, item);
-
-		obs_data_set_array(collection, "sources", newSources);
-		obs_data_save_json_pretty_safe(
-			collection, QT_TO_UTF8(exportFile), "tmp", "bak");
+		QFile::copy(path + currentFile + ".json", exportFile);
 	}
 }
 

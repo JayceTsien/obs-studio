@@ -1,10 +1,11 @@
 #include "obs-module.h"
 #include "scripts.hpp"
+#include "frontend-tools-config.h"
 #include "../../properties-view.hpp"
 #include "../../qt-wrappers.hpp"
-#include "../../plain-text-edit.hpp"
 
 #include <QFileDialog>
+#include <QPlainTextEdit>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QScrollBar>
@@ -32,7 +33,7 @@
 
 #include "ui_scripts.h"
 
-#if defined(Python_FOUND) && (defined(_WIN32) || defined(__APPLE__))
+#if COMPILE_PYTHON && (defined(_WIN32) || defined(__APPLE__))
 #define PYTHON_UI 1
 #else
 #define PYTHON_UI 0
@@ -81,14 +82,18 @@ struct ScriptData {
 static ScriptData *scriptData = nullptr;
 static ScriptsTool *scriptsWindow = nullptr;
 static ScriptLogWindow *scriptLogWindow = nullptr;
-static OBSPlainTextEdit *scriptLogWidget = nullptr;
+static QPlainTextEdit *scriptLogWidget = nullptr;
 
 /* ----------------------------------------------------------------- */
 
-ScriptLogWindow::ScriptLogWindow() : QDialog(nullptr)
+ScriptLogWindow::ScriptLogWindow() : QWidget(nullptr)
 {
-	OBSPlainTextEdit *edit = new OBSPlainTextEdit();
+	const QFont fixedFont =
+		QFontDatabase::systemFont(QFontDatabase::FixedFont);
+
+	QPlainTextEdit *edit = new QPlainTextEdit();
 	edit->setReadOnly(true);
+	edit->setFont(fixedFont);
 	edit->setWordWrapMode(QTextOption::NoWrap);
 
 	QHBoxLayout *buttonLayout = new QHBoxLayout();
@@ -108,8 +113,6 @@ ScriptLogWindow::ScriptLogWindow() : QDialog(nullptr)
 
 	setLayout(layout);
 	scriptLogWidget = edit;
-
-	setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
 	resize(600, 400);
 
@@ -181,10 +184,8 @@ void ScriptLogWindow::Clear()
 
 /* ----------------------------------------------------------------- */
 
-ScriptsTool::ScriptsTool() : QDialog(nullptr), ui(new Ui_ScriptsTool)
+ScriptsTool::ScriptsTool() : QWidget(nullptr), ui(new Ui_ScriptsTool)
 {
-	setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-
 	ui->setupUi(this);
 	RefreshLists();
 
@@ -194,7 +195,6 @@ ScriptsTool::ScriptsTool() : QDialog(nullptr), ui(new Ui_ScriptsTool)
 		config_get_string(config, "Python", "Path" ARCH_NAME);
 	ui->pythonPath->setText(path);
 	ui->pythonPathLabel->setText(obs_module_text(PYTHONPATH_LABEL_TEXT));
-	updatePythonVersionLabel();
 #else
 	delete ui->pythonSettingsTab;
 	ui->pythonSettingsTab = nullptr;
@@ -218,20 +218,8 @@ ScriptsTool::~ScriptsTool()
 	config_t *global_config = obs_frontend_get_global_config();
 	config_set_int(global_config, "scripts-tool", "prevScriptRow",
 		       ui->scripts->currentRow());
-}
 
-void ScriptsTool::updatePythonVersionLabel()
-{
-	QString label;
-	if (obs_scripting_python_loaded()) {
-		char version[8];
-		obs_scripting_python_version(version, sizeof(version));
-		label = QString(obs_module_text("PythonSettings.PythonVersion"))
-				.arg(version);
-	} else {
-		label = obs_module_text("PythonSettings.PythonNotLoaded");
-	}
-	ui->pythonVersionLabel->setText(label);
+	delete ui;
 }
 
 void ScriptsTool::RemoveScript(const char *path)
@@ -470,28 +458,10 @@ void ScriptsTool::on_pythonPathBrowse_clicked()
 
 	ui->pythonPath->setText(newPath);
 
-	bool loaded = obs_scripting_python_loaded();
-
-	if (loaded && !newPath.isEmpty() && curPath.compare(newPath) != 0) {
-		char version[8];
-		obs_scripting_python_version(version, sizeof(version));
-		QString message =
-			QString(obs_module_text(
-					"PythonSettings.AlreadyLoaded.Message"))
-				.arg(version);
-		OBSMessageBox::information(
-			this,
-			obs_module_text("PythonSettings.AlreadyLoaded.Title"),
-			message);
+	if (obs_scripting_python_loaded())
 		return;
-	} else if (loaded) {
-		return;
-	}
-
 	if (!obs_scripting_load_python(path))
 		return;
-
-	updatePythonVersionLabel();
 
 	for (OBSScript &script : scriptData->scripts) {
 		enum obs_script_lang lang = obs_script_get_lang(script);
@@ -684,22 +654,6 @@ extern "C" void InitScripts()
 	config_t *config = obs_frontend_get_global_config();
 	const char *python_path =
 		config_get_string(config, "Python", "Path" ARCH_NAME);
-
-#ifdef __APPLE__
-	if (python_path && *python_path) {
-		std::string _python_path(python_path);
-		std::size_t pos =
-			_python_path.find("/Python.framework/Versions");
-
-		if (pos != std::string::npos) {
-			std::string _temp = _python_path.substr(0, pos);
-			config_set_string(config, "Python", "Path" ARCH_NAME,
-					  _temp.c_str());
-			config_save(config);
-			python_path = _temp.c_str();
-		}
-	}
-#endif
 
 	if (!obs_scripting_python_loaded() && python_path && *python_path)
 		obs_scripting_load_python(python_path);

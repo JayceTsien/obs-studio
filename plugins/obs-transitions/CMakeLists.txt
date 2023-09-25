@@ -1,26 +1,27 @@
-cmake_minimum_required(VERSION 3.16...3.25)
+project(obs-transitions)
 
-legacy_check()
+set(obs-transitions_SOURCES
+	obs-transitions.c
+	transition-slide.c
+	transition-swipe.c
+	transition-fade.c
+	transition-cut.c
+	transition-fade-to-color.c
+	transition-luma-wipe.c
+	transition-stinger.c
+	)
 
-add_library(obs-transitions MODULE)
-add_library(OBS::transition ALIAS obs-transitions)
-
-target_sources(
-  obs-transitions
-  PRIVATE obs-transitions.c
-          transition-slide.c
-          transition-swipe.c
-          transition-fade.c
-          transition-cut.c
-          transition-fade-to-color.c
-          transition-luma-wipe.c
-          transition-stinger.c)
-
-target_link_libraries(obs-transitions PRIVATE OBS::libobs)
-
-if(OS_WINDOWS)
-  configure_file(cmake/windows/obs-module.rc.in obs-transitions.rc)
-  target_sources(obs-transitions PRIVATE obs-transitions.rc)
+if(WIN32)
+	set(MODULE_DESCRIPTION "OBS Transitions module")
+	configure_file(${CMAKE_SOURCE_DIR}/cmake/winrc/obs-module.rc.in obs-transitions.rc)
+	list(APPEND obs-transitions_SOURCES
+		obs-transitions.rc)
 endif()
 
-set_target_properties_obs(obs-transitions PROPERTIES FOLDER plugins PREFIX "")
+add_library(obs-transitions MODULE
+	${obs-transitions_SOURCES})
+target_link_libraries(obs-transitions
+	libobs)
+set_target_properties(obs-transitions PROPERTIES FOLDER "plugins")
+
+install_obs_plugin_with_data(obs-transitions data)

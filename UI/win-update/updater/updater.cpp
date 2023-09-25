@@ -24,8 +24,6 @@
 #include <vector>
 #include <string>
 #include <mutex>
-#include <unordered_set>
-#include <queue>
 
 using namespace std;
 using namespace json11;
@@ -40,15 +38,13 @@ HCRYPTPROV hProvider = 0;
 
 static bool bExiting = false;
 static bool updateFailed = false;
+static bool is32bit = false;
 
 static bool downloadThreadFailure = false;
 
 int totalFileSize = 0;
 int completedFileSize = 0;
 static int completedUpdates = 0;
-
-static wchar_t tempPath[MAX_PATH];
-static wchar_t obs_base_directory[MAX_PATH];
 
 struct LastError {
 	DWORD code;
@@ -62,14 +58,18 @@ void FreeWinHttpHandle(HINTERNET handle)
 
 /* ----------------------------------------------------------------------- */
 
+static inline bool is_64bit_windows(void);
+
 static inline bool HasVS2019Redist2()
 {
 	wchar_t base[MAX_PATH];
 	wchar_t path[MAX_PATH];
 	WIN32_FIND_DATAW wfd;
 	HANDLE handle;
+	int folder = (is32bit && is_64bit_windows()) ? CSIDL_SYSTEMX86
+						     : CSIDL_SYSTEM;
 
-	SHGetFolderPathW(NULL, CSIDL_SYSTEM, NULL, SHGFP_TYPE_CURRENT, base);
+	SHGetFolderPathW(NULL, folder, NULL, SHGFP_TYPE_CURRENT, base);
 
 #define check_dll_installed(dll)                                    \
 	do {                                                        \
@@ -85,7 +85,9 @@ static inline bool HasVS2019Redist2()
 
 	check_dll_installed(L"msvcp140");
 	check_dll_installed(L"vcruntime140");
-	check_dll_installed(L"vcruntime140_1");
+	if (!is32bit) {
+		check_dll_installed(L"vcruntime140_1");
+	}
 
 #undef check_dll_installed
 
@@ -135,8 +137,8 @@ try {
 	WinHandle hSrc;
 	WinHandle hDest;
 
-	hSrc = CreateFile(src, GENERIC_READ, FILE_SHARE_READ, nullptr,
-			  OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+	hSrc = CreateFile(src, GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+			  FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
 	if (!hSrc.Valid())
 		throw LastError();
 
@@ -167,20 +169,6 @@ try {
 } catch (LastError error) {
 	SetLastError(error.code);
 	return false;
-}
-
-static void MyDeleteFile(const wstring &filename)
-{
-	/* Try straightforward delete first */
-	if (DeleteFile(filename.c_str()))
-		return;
-
-	DWORD err = GetLastError();
-	if (err == ERROR_FILE_NOT_FOUND)
-		return;
-
-	/* If all else fails, schedule the file to be deleted on reboot */
-	MoveFileEx(filename.c_str(), NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
 }
 
 static bool IsSafeFilename(const wchar_t *path)
@@ -242,7 +230,6 @@ enum state_t {
 	STATE_PENDING_DOWNLOAD,
 	STATE_DOWNLOADING,
 	STATE_DOWNLOADED,
-	STATE_ALREADY_DOWNLOADED,
 	STATE_INSTALL_FAILED,
 	STATE_INSTALLED,
 };
@@ -262,7 +249,6 @@ struct update_t {
 	state_t state = STATE_INVALID;
 	bool has_hash = false;
 	bool patchable = false;
-	bool compressed = false;
 
 	inline update_t() {}
 	inline update_t(const update_t &from)
@@ -275,8 +261,7 @@ struct update_t {
 		  fileSize(from.fileSize),
 		  state(from.state),
 		  has_hash(from.has_hash),
-		  patchable(from.patchable),
-		  compressed(from.compressed)
+		  patchable(from.patchable)
 	{
 		memcpy(hash, from.hash, sizeof(hash));
 		memcpy(downloadhash, from.downloadhash, sizeof(downloadhash));
@@ -293,8 +278,7 @@ struct update_t {
 		  fileSize(from.fileSize),
 		  state(from.state),
 		  has_hash(from.has_hash),
-		  patchable(from.patchable),
-		  compressed(from.compressed)
+		  patchable(from.patchable)
 	{
 		from.state = STATE_INVALID;
 
@@ -333,7 +317,6 @@ struct update_t {
 		state = from.state;
 		has_hash = from.has_hash;
 		patchable = from.patchable;
-		compressed = from.compressed;
 
 		memcpy(hash, from.hash, sizeof(hash));
 		memcpy(downloadhash, from.downloadhash, sizeof(downloadhash));
@@ -343,30 +326,13 @@ struct update_t {
 	}
 };
 
-struct deletion_t {
-	wstring originalFilename;
-	wstring deleteMeFilename;
-
-	void UndoRename()
-	{
-		if (!deleteMeFilename.empty())
-			MoveFile(deleteMeFilename.c_str(),
-				 originalFilename.c_str());
-	}
-};
-
-static unordered_map<string, wstring> hashes;
 static vector<update_t> updates;
-static vector<deletion_t> deletions;
 static mutex updateMutex;
 
 static inline void CleanupPartialUpdates()
 {
 	for (update_t &update : updates)
 		update.CleanPartialUpdate();
-
-	for (deletion_t &deletion : deletions)
-		deletion.UndoRename();
 }
 
 /* ----------------------------------------------------------------------- */
@@ -378,9 +344,7 @@ bool DownloadWorkerThread()
 
 	const DWORD enableHTTP2Flag = WINHTTP_PROTOCOL_FLAG_HTTP2;
 
-	const DWORD compressionFlags = WINHTTP_DECOMPRESSION_FLAG_ALL;
-
-	HttpHandle hSession = WinHttpOpen(L"OBS Studio Updater/3.0",
+	HttpHandle hSession = WinHttpOpen(L"OBS Studio Updater/2.1",
 					  WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
 					  WINHTTP_NO_PROXY_NAME,
 					  WINHTTP_NO_PROXY_BYPASS, 0);
@@ -396,9 +360,6 @@ bool DownloadWorkerThread()
 	WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL,
 			 (LPVOID)&enableHTTP2Flag, sizeof(enableHTTP2Flag));
 
-	WinHttpSetOption(hSession, WINHTTP_OPTION_DECOMPRESSION,
-			 (LPVOID)&compressionFlags, sizeof(compressionFlags));
-
 	HttpHandle hConnect = WinHttpConnect(hSession,
 					     L"cdn-fastly.obsproject.com",
 					     INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -407,8 +368,6 @@ bool DownloadWorkerThread()
 		Status(L"Update failed: Couldn't connect to cdn-fastly.obsproject.com");
 		return false;
 	}
-
-	ZSTDDCtx zCtx;
 
 	for (;;) {
 		bool foundWork = false;
@@ -481,20 +440,6 @@ bool DownloadWorkerThread()
 				return 1;
 			}
 
-			if (update.compressed && !update.patchable) {
-				int res = DecompressFile(
-					zCtx, update.tempPath.c_str(),
-					update.fileSize);
-				if (res) {
-					downloadThreadFailure = true;
-					DeleteFile(update.tempPath.c_str());
-					Status(L"Update failed: Decompression "
-					       L"failed on %s (error code %d)",
-					       update.outputPath.c_str(), res);
-					return 1;
-				}
-			}
-
 			ulock.lock();
 
 			update.state = STATE_DOWNLOADED;
@@ -542,8 +487,6 @@ static inline DWORD WaitIfOBS(DWORD id, const wchar_t *expected)
 {
 	wchar_t path[MAX_PATH];
 	wchar_t *name;
-	DWORD path_len = _countof(path);
-
 	*path = 0;
 
 	WinHandle proc = OpenProcess(PROCESS_QUERY_INFORMATION |
@@ -552,12 +495,7 @@ static inline DWORD WaitIfOBS(DWORD id, const wchar_t *expected)
 	if (!proc.Valid())
 		return WAITIFOBS_WRONG_PROCESS;
 
-	if (!QueryFullProcessImageNameW(proc, 0, path, &path_len))
-		return WAITIFOBS_WRONG_PROCESS;
-
-	// check it's actually our exe that's running
-	size_t len = wcslen(obs_base_directory);
-	if (wcsncmp(path, obs_base_directory, len))
+	if (!GetProcessImageFileName(proc, path, _countof(path)))
 		return WAITIFOBS_WRONG_PROCESS;
 
 	name = wcsrchr(path, L'\\');
@@ -584,6 +522,7 @@ static inline DWORD WaitIfOBS(DWORD id, const wchar_t *expected)
 static bool WaitForOBS()
 {
 	DWORD proc_ids[1024], needed, count;
+	const wchar_t *name = is32bit ? L"obs32" : L"obs64";
 
 	if (!EnumProcesses(proc_ids, sizeof(proc_ids), &needed)) {
 		return true;
@@ -594,7 +533,7 @@ static bool WaitForOBS()
 	for (DWORD i = 0; i < count; i++) {
 		DWORD id = proc_ids[i];
 		if (id != 0) {
-			switch (WaitIfOBS(id, L"obs64")) {
+			switch (WaitIfOBS(id, name)) {
 			case WAITIFOBS_SUCCESS:
 				return true;
 			case WAITIFOBS_WRONG_PROCESS:
@@ -621,72 +560,6 @@ static inline bool WideToUTF8(char *utf8, int utf8Size, const wchar_t *wide)
 				     nullptr, nullptr);
 }
 
-#define UTF8ToWideBuf(wide, utf8) UTF8ToWide(wide, _countof(wide), utf8)
-#define WideToUTF8Buf(utf8, wide) WideToUTF8(utf8, _countof(utf8), wide)
-
-/* ----------------------------------------------------------------------- */
-
-queue<string> hashQueue;
-
-void HasherThread()
-{
-	bool hasherThreadFailure = false;
-	unique_lock<mutex> ulock(updateMutex, defer_lock);
-
-	while (true) {
-		ulock.lock();
-		if (hashQueue.empty())
-			return;
-
-		auto fileName = hashQueue.front();
-		hashQueue.pop();
-
-		ulock.unlock();
-
-		wchar_t updateFileName[MAX_PATH];
-
-		if (!UTF8ToWideBuf(updateFileName, fileName.c_str()))
-			continue;
-		if (!IsSafeFilename(updateFileName))
-			continue;
-
-		BYTE existingHash[BLAKE2_HASH_LENGTH];
-		wchar_t fileHashStr[BLAKE2_HASH_STR_LENGTH];
-
-		if (CalculateFileHash(updateFileName, existingHash)) {
-			HashToString(existingHash, fileHashStr);
-			ulock.lock();
-			hashes.emplace(fileName, fileHashStr);
-			ulock.unlock();
-		}
-	}
-}
-
-static void RunHasherWorkers(int num, const Json &packages)
-try {
-
-	for (const Json &package : packages.array_items()) {
-		for (const Json &file : package["files"].array_items()) {
-			if (!file["name"].is_string())
-				continue;
-			hashQueue.push(file["name"].string_value());
-		}
-	}
-
-	vector<future<void>> futures;
-	futures.resize(num);
-
-	for (auto &result : futures) {
-		result = async(launch::async, HasherThread);
-	}
-	for (auto &result : futures) {
-		result.wait();
-	}
-} catch (...) {
-}
-
-/* ----------------------------------------------------------------------- */
-
 static inline bool FileExists(const wchar_t *path)
 {
 	WIN32_FIND_DATAW wfd;
@@ -701,21 +574,59 @@ static inline bool FileExists(const wchar_t *path)
 
 static bool NonCorePackageInstalled(const char *name)
 {
-	if (strcmp(name, "obs-browser") == 0)
-		return FileExists(L"obs-plugins\\64bit\\obs-browser.dll");
+	if (is32bit) {
+		if (strcmp(name, "obs-browser") == 0) {
+			return FileExists(
+				L"obs-plugins\\32bit\\obs-browser.dll");
+		} else if (strcmp(name, "realsense") == 0) {
+			return FileExists(L"obs-plugins\\32bit\\win-ivcam.dll");
+		}
+	} else {
+		if (strcmp(name, "obs-browser") == 0) {
+			return FileExists(
+				L"obs-plugins\\64bit\\obs-browser.dll");
+		} else if (strcmp(name, "realsense") == 0) {
+			return FileExists(L"obs-plugins\\64bit\\win-ivcam.dll");
+		}
+	}
 
 	return false;
 }
 
+static inline bool is_64bit_windows(void)
+{
+#ifdef _WIN64
+	return true;
+#else
+	BOOL x86 = false;
+	bool success = !!IsWow64Process(GetCurrentProcess(), &x86);
+	return success && !!x86;
+#endif
+}
+
+static inline bool is_64bit_file(const char *file)
+{
+	if (!file)
+		return false;
+
+	return strstr(file, "64bit") != nullptr ||
+	       strstr(file, "64.dll") != nullptr ||
+	       strstr(file, "64.exe") != nullptr;
+}
+
+#define UTF8ToWideBuf(wide, utf8) UTF8ToWide(wide, _countof(wide), utf8)
+#define WideToUTF8Buf(utf8, wide) WideToUTF8(utf8, _countof(utf8), wide)
+
 #define UPDATE_URL L"https://cdn-fastly.obsproject.com/update_studio"
 
 static bool AddPackageUpdateFiles(const Json &root, size_t idx,
-				  const wchar_t *tempPath,
-				  const wchar_t *branch)
+				  const wchar_t *tempPath)
 {
 	const Json &package = root[idx];
 	const Json &name = package["name"];
 	const Json &files = package["files"];
+
+	bool isWin64 = is_64bit_windows();
 
 	if (!files.is_array())
 		return true;
@@ -737,7 +648,6 @@ static bool AddPackageUpdateFiles(const Json &root, size_t idx,
 		const Json &file = files[j];
 		const Json &fileName = file["name"];
 		const Json &hash = file["hash"];
-		const Json &dlHash = file["compressed_hash"];
 		const Json &size = file["size"];
 
 		if (!fileName.is_string())
@@ -749,32 +659,30 @@ static bool AddPackageUpdateFiles(const Json &root, size_t idx,
 
 		const string &fileUTF8 = fileName.string_value();
 		const string &hashUTF8 = hash.string_value();
-		const string &dlHashUTF8 = dlHash.string_value();
 		int fileSize = size.int_value();
 
 		if (hashUTF8.size() != BLAKE2_HASH_LENGTH * 2)
 			continue;
 
-		/* The download hash may not exist if a file is uncompressed */
+		if (!isWin64 && is_64bit_file(fileUTF8.c_str()))
+			continue;
 
-		bool compressed = false;
-		if (dlHashUTF8.size() == BLAKE2_HASH_LENGTH * 2)
-			compressed = true;
+		/* ignore update files of opposite arch to reduce download */
+
+		if ((is32bit && fileUTF8.find("/64bit/") != string::npos) ||
+		    (!is32bit && fileUTF8.find("/32bit/") != string::npos))
+			continue;
 
 		/* convert strings to wide */
 
 		wchar_t sourceURL[1024];
 		wchar_t updateFileName[MAX_PATH];
 		wchar_t updateHashStr[BLAKE2_HASH_STR_LENGTH];
-		wchar_t downloadHashStr[BLAKE2_HASH_STR_LENGTH];
 		wchar_t tempFilePath[MAX_PATH];
 
 		if (!UTF8ToWideBuf(updateFileName, fileUTF8.c_str()))
 			continue;
 		if (!UTF8ToWideBuf(updateHashStr, hashUTF8.c_str()))
-			continue;
-		if (compressed &&
-		    !UTF8ToWideBuf(downloadHashStr, dlHashUTF8.c_str()))
 			continue;
 
 		/* make sure paths are safe */
@@ -786,22 +694,23 @@ static bool AddPackageUpdateFiles(const Json &root, size_t idx,
 			return false;
 		}
 
-		StringCbPrintf(sourceURL, sizeof(sourceURL), L"%s/%s/%s/%s",
-			       UPDATE_URL, branch, wPackageName,
-			       updateFileName);
+		StringCbPrintf(sourceURL, sizeof(sourceURL), L"%s/%s/%s",
+			       UPDATE_URL, wPackageName, updateFileName);
 		StringCbPrintf(tempFilePath, sizeof(tempFilePath), L"%s\\%s",
 			       tempPath, updateHashStr);
 
 		/* Check file hash */
 
-		wstring fileHashStr;
+		BYTE existingHash[BLAKE2_HASH_LENGTH];
+		wchar_t fileHashStr[BLAKE2_HASH_STR_LENGTH];
 		bool has_hash;
 
 		/* We don't really care if this fails, it's just to avoid
 		 * wasting bandwidth by downloading unmodified files */
-		if (hashes.count(fileUTF8)) {
-			fileHashStr = hashes[fileUTF8];
-			if (fileHashStr == updateHashStr)
+		if (CalculateFileHash(updateFileName, existingHash)) {
+
+			HashToString(existingHash, fileHashStr);
+			if (wcscmp(fileHashStr, updateHashStr) == 0)
 				continue;
 
 			has_hash = true;
@@ -820,21 +729,13 @@ static bool AddPackageUpdateFiles(const Json &root, size_t idx,
 		update.packageName = packageName;
 		update.state = STATE_PENDING_DOWNLOAD;
 		update.patchable = false;
-		update.compressed = compressed;
 
-		StringToHash(updateHashStr, update.hash);
-
-		if (compressed) {
-			update.sourceURL += L".zst";
-			StringToHash(downloadHashStr, update.downloadhash);
-		} else {
-			memcpy(update.downloadhash, update.hash,
-			       sizeof(update.downloadhash));
-		}
+		StringToHash(updateHashStr, update.downloadhash);
+		memcpy(update.hash, update.downloadhash, sizeof(update.hash));
 
 		update.has_hash = has_hash;
 		if (has_hash)
-			StringToHash(fileHashStr.data(), update.my_hash);
+			StringToHash(fileHashStr, update.my_hash);
 
 		updates.push_back(move(update));
 
@@ -842,70 +743,6 @@ static bool AddPackageUpdateFiles(const Json &root, size_t idx,
 	}
 
 	return true;
-}
-
-static void AddPackageRemovedFiles(const Json &package)
-{
-	const Json &removed_files = package["removed_files"];
-	if (!removed_files.is_array())
-		return;
-
-	for (auto &item : removed_files.array_items()) {
-		if (!item.is_string())
-			continue;
-
-		wchar_t removedFileName[MAX_PATH];
-		if (!UTF8ToWideBuf(removedFileName,
-				   item.string_value().c_str()))
-			continue;
-
-		/* Ensure paths are safe, also check if file exists */
-		if (!IsSafeFilename(removedFileName))
-			continue;
-		/* Technically GetFileAttributes can fail for other reasons,
-		 * so double-check by also checking the last error */
-		if (GetFileAttributesW(removedFileName) ==
-		    INVALID_FILE_ATTRIBUTES) {
-			int err = GetLastError();
-			if (err == ERROR_FILE_NOT_FOUND ||
-			    err == ERROR_PATH_NOT_FOUND)
-				continue;
-		}
-
-		deletion_t deletion;
-		deletion.originalFilename = removedFileName;
-
-		deletions.push_back(deletion);
-	}
-}
-
-static bool RenameRemovedFile(deletion_t &deletion)
-{
-	_TCHAR deleteMeName[MAX_PATH];
-	_TCHAR randomStr[MAX_PATH];
-
-	BYTE junk[40];
-	BYTE hash[BLAKE2_HASH_LENGTH];
-
-	CryptGenRandom(hProvider, sizeof(junk), junk);
-	blake2b(hash, sizeof(hash), junk, sizeof(junk), NULL, 0);
-	HashToString(hash, randomStr);
-	randomStr[8] = 0;
-
-	StringCbCopy(deleteMeName, sizeof(deleteMeName),
-		     deletion.originalFilename.c_str());
-
-	StringCbCat(deleteMeName, sizeof(deleteMeName), L".");
-	StringCbCat(deleteMeName, sizeof(deleteMeName), randomStr);
-	StringCbCat(deleteMeName, sizeof(deleteMeName), L".deleteme");
-
-	if (MoveFile(deletion.originalFilename.c_str(), deleteMeName)) {
-		/* Only set this if the file was successfully renamed */
-		deletion.deleteMeFilename = deleteMeName;
-		return true;
-	}
-
-	return false;
 }
 
 static void UpdateWithPatchIfAvailable(const char *name, const char *hash,
@@ -951,13 +788,6 @@ static void UpdateWithPatchIfAvailable(const char *name, const char *hash,
 		update.sourceURL = sourceURL;
 		update.fileSize = size;
 		update.patchable = true;
-
-		/* Since the patch depends on the previous version, we can
-		 * no longer rely on the temp name being unique to the
-		 * new file's hash */
-		update.tempPath = tempPath;
-		update.tempPath += L"\\";
-		update.tempPath += patchHashStr;
 		break;
 	}
 }
@@ -997,7 +827,7 @@ static bool MoveInUseFileAway(update_t &file)
 	return false;
 }
 
-static bool UpdateFile(ZSTD_DCtx *ctx, update_t &file)
+static bool UpdateFile(update_t &file)
 {
 	wchar_t oldFileRenamedPath[MAX_PATH];
 
@@ -1054,7 +884,7 @@ static bool UpdateFile(ZSTD_DCtx *ctx, update_t &file)
 	retryAfterMovingFile:
 
 		if (file.patchable) {
-			error_code = ApplyPatch(ctx, file.tempPath.c_str(),
+			error_code = ApplyPatch(file.tempPath.c_str(),
 						file.outputPath.c_str());
 			installed_ok = (error_code == 0);
 
@@ -1104,10 +934,9 @@ static bool UpdateFile(ZSTD_DCtx *ctx, update_t &file)
 				       L"programs and try again.",
 				       curFileName);
 			} else {
-				DWORD err = GetLastError();
 				Status(L"Update failed: Couldn't update %s "
 				       L"(error %d)",
-				       curFileName, err ? err : error_code);
+				       curFileName, GetLastError());
 			}
 
 			file.state = STATE_INSTALL_FAILED;
@@ -1145,69 +974,7 @@ static bool UpdateFile(ZSTD_DCtx *ctx, update_t &file)
 	return true;
 }
 
-queue<reference_wrapper<update_t>> updateQueue;
-static int lastPosition = 0;
-static int installed = 0;
-static bool updateThreadFailed = false;
-
-static bool UpdateWorker()
-{
-	unique_lock<mutex> ulock(updateMutex, defer_lock);
-	ZSTDDCtx zCtx;
-
-	while (true) {
-		ulock.lock();
-
-		if (updateThreadFailed)
-			return false;
-		if (updateQueue.empty())
-			break;
-
-		auto update = updateQueue.front();
-		updateQueue.pop();
-		ulock.unlock();
-
-		if (!UpdateFile(zCtx, update)) {
-			updateThreadFailed = true;
-			return false;
-		} else {
-			int position = (int)(((float)++installed /
-					      (float)completedUpdates) *
-					     100.0f);
-			if (position > lastPosition) {
-				lastPosition = position;
-				SendDlgItemMessage(hwndMain, IDC_PROGRESS,
-						   PBM_SETPOS, position, 0);
-			}
-		}
-	}
-
-	return true;
-}
-
-static bool RunUpdateWorkers(int num)
-try {
-	for (update_t &update : updates) {
-		updateQueue.push(update);
-	}
-
-	vector<future<bool>> thread_success_results;
-	thread_success_results.resize(num);
-
-	for (future<bool> &result : thread_success_results) {
-		result = async(launch::async, UpdateWorker);
-	}
-	for (future<bool> &result : thread_success_results) {
-		if (!result.get()) {
-			return false;
-		}
-	}
-
-	return true;
-
-} catch (...) {
-	return false;
-}
+static wchar_t tempPath[MAX_PATH] = {};
 
 #define PATCH_MANIFEST_URL \
 	L"https://obsproject.com/update_studio/getpatchmanifest"
@@ -1220,9 +987,7 @@ static bool UpdateVS2019Redists(const Json &root)
 
 	const DWORD tlsProtocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 
-	const DWORD compressionFlags = WINHTTP_DECOMPRESSION_FLAG_ALL;
-
-	HttpHandle hSession = WinHttpOpen(L"OBS Studio Updater/3.0",
+	HttpHandle hSession = WinHttpOpen(L"OBS Studio Updater/2.1",
 					  WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
 					  WINHTTP_NO_PROXY_NAME,
 					  WINHTTP_NO_PROXY_BYPASS, 0);
@@ -1233,9 +998,6 @@ static bool UpdateVS2019Redists(const Json &root)
 
 	WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
 			 (LPVOID)&tlsProtocols, sizeof(tlsProtocols));
-
-	WinHttpSetOption(hSession, WINHTTP_OPTION_DECOMPRESSION,
-			 (LPVOID)&compressionFlags, sizeof(compressionFlags));
 
 	HttpHandle hConnect = WinHttpConnect(hSession,
 					     L"cdn-fastly.obsproject.com",
@@ -1255,14 +1017,19 @@ static bool UpdateVS2019Redists(const Json &root)
 	/* ------------------------------------------ *
 	 * Download redist                            */
 
-	Status(L"Downloading Visual C++ 2019 Redistributable");
+	Status(L"Downloading %s", L"Visual C++ 2019 Redistributable");
 
-	wstring sourceURL =
-		L"https://cdn-fastly.obsproject.com/downloads/VC_redist.x64.exe";
+	const wchar_t *file = (is32bit) ? L"VC_redist.x86.exe"
+					: L"VC_redist.x64.exe";
+
+	wstring sourceURL;
+	sourceURL += L"https://cdn-fastly.obsproject.com/downloads/";
+	sourceURL += file;
 
 	wstring destPath;
 	destPath += tempPath;
-	destPath += L"\\VC_redist.x64.exe";
+	destPath += L"\\";
+	destPath += file;
 
 	if (!HTTPGetFile(hConnect, sourceURL.c_str(), destPath.c_str(),
 			 L"Accept-Encoding: gzip", &responseCode)) {
@@ -1277,7 +1044,8 @@ static bool UpdateVS2019Redists(const Json &root)
 	/* ------------------------------------------ *
 	 * Get expected hash                          */
 
-	const Json &redistJson = root["vc2019_redist_x64"];
+	const char *which = is32bit ? "vc2019_redist_x86" : "vc2019_redist_x64";
+	const Json &redistJson = root[which];
 	if (!redistJson.is_string()) {
 		Status(L"Update failed: Could not parse VC2019 redist json");
 		return false;
@@ -1411,8 +1179,6 @@ static bool Update(wchar_t *cmdLine)
 	 * Check if updating portable build      */
 
 	bool bIsPortable = false;
-	wstring branch = L"stable";
-	wstring appdata;
 
 	if (cmdLine[0]) {
 		int argc;
@@ -1421,26 +1187,10 @@ static bool Update(wchar_t *cmdLine)
 		if (argv) {
 			for (int i = 0; i < argc; i++) {
 				if (wcscmp(argv[i], L"Portable") == 0) {
-					// Legacy OBS
 					bIsPortable = true;
-					break;
-				} else if (wcsncmp(argv[i], L"--branch=", 9) ==
-					   0) {
-					branch = argv[i] + 9;
-				} else if (wcsncmp(argv[i], L"--appdata=",
-						   10) == 0) {
-					appdata = argv[i] + 10;
-				} else if (wcscmp(argv[i], L"--portable") ==
-					   0) {
-					bIsPortable = true;
-				} else if (wcsncmp(argv[i],
-						   L"--portable--branch=",
-						   19) == 0) {
-					/* Versions pre-29.1 beta 2 produce broken parameters :( */
-					bIsPortable = true;
-					branch = argv[i] + 19;
 				}
 			}
+
 			LocalFree((HLOCAL)argv);
 		}
 	}
@@ -1452,20 +1202,21 @@ static bool Update(wchar_t *cmdLine)
 	lpAppDataPath[0] = 0;
 
 	if (bIsPortable) {
-		StringCbCopy(lpAppDataPath, sizeof(lpAppDataPath),
-			     obs_base_directory);
+		GetCurrentDirectory(_countof(lpAppDataPath), lpAppDataPath);
 		StringCbCat(lpAppDataPath, sizeof(lpAppDataPath), L"\\config");
 	} else {
-		if (!appdata.empty()) {
-			HRESULT hr = StringCbCopy(lpAppDataPath,
-						  sizeof(lpAppDataPath),
-						  appdata.c_str());
-			if (hr != S_OK) {
-				Status(L"Update failed: Could not determine AppData "
-				       L"location");
-				return false;
-			}
-		} else {
+		DWORD ret;
+		ret = GetEnvironmentVariable(L"OBS_USER_APPDATA_PATH",
+					     lpAppDataPath,
+					     _countof(lpAppDataPath));
+
+		if (ret >= _countof(lpAppDataPath)) {
+			Status(L"Update failed: Could not determine AppData "
+			       L"location");
+			return false;
+		}
+
+		if (!ret) {
 			CoTaskMemPtr<wchar_t> pOut;
 			HRESULT hr = SHGetKnownFolderPath(
 				FOLDERID_RoamingAppData, KF_FLAG_DEFAULT,
@@ -1536,23 +1287,14 @@ static bool Update(wchar_t *cmdLine)
 	}
 
 	/* ------------------------------------- *
-	 * Hash local files listed in manifest   */
-
-	RunHasherWorkers(4, root["packages"]);
-
-	/* ------------------------------------- *
 	 * Parse current manifest update files   */
 
 	const Json::array &packages = root["packages"].array_items();
 	for (size_t i = 0; i < packages.size(); i++) {
-		if (!AddPackageUpdateFiles(packages, i, tempPath,
-					   branch.c_str())) {
+		if (!AddPackageUpdateFiles(packages, i, tempPath)) {
 			Status(L"Update failed: Failed to process update packages");
 			return false;
 		}
-
-		/* Add removed files to deletion queue (if any) */
-		AddPackageRemovedFiles(packages[i]);
 	}
 
 	SendDlgItemMessage(hwndMain, IDC_PROGRESS, PBM_SETMARQUEE, 0, 0);
@@ -1622,26 +1364,16 @@ static bool Update(wchar_t *cmdLine)
 		int responseCode;
 
 		int len = (int)post_body.size();
-		size_t compressSize = ZSTD_compressBound(len);
+		uLong compressSize = compressBound(len);
 		string compressedJson;
 
 		compressedJson.resize(compressSize);
+		compress2((Bytef *)&compressedJson[0], &compressSize,
+			  (const Bytef *)post_body.c_str(), len,
+			  Z_BEST_COMPRESSION);
+		compressedJson.resize(compressSize);
 
-		size_t result =
-			ZSTD_compress(&compressedJson[0], compressedJson.size(),
-				      post_body.data(), post_body.size(),
-				      ZSTD_CLEVEL_DEFAULT);
-
-		if (ZSTD_isError(result))
-			return false;
-
-		compressedJson.resize(result);
-
-		wstring manifestUrl(PATCH_MANIFEST_URL);
-		if (branch != L"stable")
-			manifestUrl += L"?branch=" + branch;
-
-		bool success = !!HTTPPostData(manifestUrl.c_str(),
+		bool success = !!HTTPPostData(PATCH_MANIFEST_URL,
 					      (BYTE *)&compressedJson[0],
 					      (int)compressedJson.size(),
 					      L"Accept-Encoding: gzip",
@@ -1710,21 +1442,6 @@ static bool Update(wchar_t *cmdLine)
 	}
 
 	/* ------------------------------------- *
-	 * Deduplicate Downloads                 */
-
-	unordered_set<wstring> tempFiles;
-	for (update_t &update : updates) {
-		if (tempFiles.count(update.tempPath)) {
-			update.state = STATE_ALREADY_DOWNLOADED;
-			totalFileSize -= update.fileSize;
-			completedUpdates++;
-			continue;
-		}
-
-		tempFiles.insert(update.tempPath);
-	}
-
-	/* ------------------------------------- *
 	 * Download Updates                      */
 
 	if (!RunDownloadWorkers(4))
@@ -1743,14 +1460,19 @@ static bool Update(wchar_t *cmdLine)
 
 	SendDlgItemMessage(hwndMain, IDC_PROGRESS, PBM_SETPOS, 0, 0);
 
-	if (!RunUpdateWorkers(4))
-		return false;
-
-	for (deletion_t &deletion : deletions) {
-		if (!RenameRemovedFile(deletion)) {
-			Status(L"Update failed: Couldn't remove "
-			       L"obsolete files");
+	for (update_t &update : updates) {
+		if (!UpdateFile(update)) {
 			return false;
+		} else {
+			updatesInstalled++;
+			int position = (int)(((float)updatesInstalled /
+					      (float)completedUpdates) *
+					     100.0f);
+			if (position > lastPosition) {
+				lastPosition = position;
+				SendDlgItemMessage(hwndMain, IDC_PROGRESS,
+						   PBM_SETPOS, position, 0);
+			}
 		}
 	}
 
@@ -1775,7 +1497,6 @@ static bool Update(wchar_t *cmdLine)
 	};
 
 	if (!bIsPortable) {
-		Status(L"Installing Virtual Camera...");
 		wchar_t regsvr[MAX_PATH];
 		wchar_t src[MAX_PATH];
 		wchar_t tmp[MAX_PATH];
@@ -1785,7 +1506,7 @@ static bool Update(wchar_t *cmdLine)
 				 SHGFP_TYPE_CURRENT, regsvr);
 		StringCbCat(regsvr, sizeof(regsvr), L"\\regsvr32.exe");
 
-		StringCbCopy(src, sizeof(src), obs_base_directory);
+		GetCurrentDirectoryW(_countof(src), src);
 		StringCbCat(src, sizeof(src),
 			    L"\\data\\obs-plugins\\win-dshow\\");
 
@@ -1799,21 +1520,21 @@ static bool Update(wchar_t *cmdLine)
 		StringCbCat(tmp2, sizeof(tmp2), L"32.dll\"");
 		runcommand(tmp2);
 
-		StringCbCopy(tmp2, sizeof(tmp2), tmp);
-		StringCbCat(tmp2, sizeof(tmp2), L"64.dll\"");
-		runcommand(tmp2);
+		if (is_64bit_windows()) {
+			StringCbCopy(tmp2, sizeof(tmp2), tmp);
+			StringCbCat(tmp2, sizeof(tmp2), L"64.dll\"");
+			runcommand(tmp2);
+		}
 	}
 
 	/* ------------------------------------- *
 	 * Update hook files and vulkan registry */
 
-	Status(L"Updating Game Capture hooks...");
 	UpdateHookFiles();
 
 	/* ------------------------------------- *
 	 * Finish                                */
 
-	Status(L"Cleaning up...");
 	/* If we get here, all updates installed successfully so we can purge
 	 * the old versions */
 	for (update_t &update : updates) {
@@ -1824,10 +1545,6 @@ static bool Update(wchar_t *cmdLine)
 		if (!update.tempPath.empty())
 			DeleteFile(update.tempPath.c_str());
 	}
-
-	/* Delete all removed files mentioned in the manifest */
-	for (deletion_t &deletion : deletions)
-		MyDeleteFile(deletion.deleteMeFilename);
 
 	SendDlgItemMessage(hwndMain, IDC_PROGRESS, PBM_SETPOS, 100, 0);
 
@@ -1882,21 +1599,35 @@ static void CancelUpdate(bool quit)
 	}
 }
 
-static void LaunchOBS(bool portable)
+static void LaunchOBS()
 {
+	wchar_t cwd[MAX_PATH];
 	wchar_t newCwd[MAX_PATH];
 	wchar_t obsPath[MAX_PATH];
 
-	StringCbCopy(obsPath, sizeof(obsPath), obs_base_directory);
-	StringCbCat(obsPath, sizeof(obsPath), L"\\bin\\64bit");
+	GetCurrentDirectory(_countof(cwd) - 1, cwd);
+
+	StringCbCopy(obsPath, sizeof(obsPath), cwd);
+	StringCbCat(obsPath, sizeof(obsPath),
+		    is32bit ? L"\\bin\\32bit" : L"\\bin\\64bit");
 	SetCurrentDirectory(obsPath);
 	StringCbCopy(newCwd, sizeof(newCwd), obsPath);
 
-	StringCbCat(obsPath, sizeof(obsPath), L"\\obs64.exe");
+	StringCbCat(obsPath, sizeof(obsPath),
+		    is32bit ? L"\\obs32.exe" : L"\\obs64.exe");
 
 	if (!FileExists(obsPath)) {
-		/* TODO: give user a message maybe? */
-		return;
+		StringCbCopy(obsPath, sizeof(obsPath), cwd);
+		StringCbCat(obsPath, sizeof(obsPath), L"\\bin\\32bit");
+		SetCurrentDirectory(obsPath);
+		StringCbCopy(newCwd, sizeof(newCwd), obsPath);
+
+		StringCbCat(obsPath, sizeof(obsPath), L"\\obs32.exe");
+
+		if (!FileExists(obsPath)) {
+			/* TODO: give user a message maybe? */
+			return;
+		}
 	}
 
 	SHELLEXECUTEINFO execInfo;
@@ -1907,9 +1638,6 @@ static void LaunchOBS(bool portable)
 	execInfo.lpFile = obsPath;
 	execInfo.lpDirectory = newCwd;
 	execInfo.nShow = SW_SHOWNORMAL;
-
-	if (portable)
-		execInfo.lpParameters = L"--portable";
 
 	ShellExecuteEx(&execInfo);
 }
@@ -1959,26 +1687,13 @@ static int RestartAsAdmin(LPCWSTR lpCmdLine, LPCWSTR cwd)
 		return 0;
 	}
 
-	/* If the admin is a different user, add the path to the user's
-	 * AppData to the command line so we can load the correct manifest. */
-	wstring elevatedCmdLine(lpCmdLine);
-	CoTaskMemPtr<wchar_t> pOut;
-	HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData,
-					  KF_FLAG_DEFAULT, nullptr, &pOut);
-	if (hr == S_OK) {
-		elevatedCmdLine += L" \"--appdata=";
-		elevatedCmdLine += pOut;
-		elevatedCmdLine += L"\"";
-	}
-
 	SHELLEXECUTEINFO shExInfo = {0};
 	shExInfo.cbSize = sizeof(shExInfo);
 	shExInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
 	shExInfo.hwnd = 0;
-	shExInfo.lpVerb = L"runas"; /* Operation to perform */
-	shExInfo.lpFile = myPath;   /* Application to start */
-	shExInfo.lpParameters =
-		elevatedCmdLine.c_str(); /* Additional parameters */
+	shExInfo.lpVerb = L"runas";        /* Operation to perform */
+	shExInfo.lpFile = myPath;          /* Application to start */
+	shExInfo.lpParameters = lpCmdLine; /* Additional parameters */
 	shExInfo.lpDirectory = cwd;
 	shExInfo.nShow = SW_NORMAL;
 	shExInfo.hInstApp = 0;
@@ -1986,6 +1701,14 @@ static int RestartAsAdmin(LPCWSTR lpCmdLine, LPCWSTR cwd)
 	/* annoyingly the actual elevated updater will disappear behind other
 	 * windows :( */
 	AllowSetForegroundWindow(ASFW_ANY);
+
+	/* if the admin is a different user, save the path to the user's
+	 * appdata so we can load the correct manifest */
+	CoTaskMemPtr<wchar_t> pOut;
+	HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData,
+					  KF_FLAG_DEFAULT, nullptr, &pOut);
+	if (hr == S_OK)
+		SetEnvironmentVariable(L"OBS_USER_APPDATA_PATH", pOut);
 
 	if (ShellExecuteEx(&shExInfo)) {
 		DWORD exitCode;
@@ -2025,22 +1748,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int)
 	INITCOMMONCONTROLSEX icce;
 
 	wchar_t cwd[MAX_PATH];
+	wchar_t newPath[MAX_PATH];
 	GetCurrentDirectoryW(_countof(cwd) - 1, cwd);
 
-	bool isPortable = wcsstr(lpCmdLine, L"Portable") != nullptr ||
-			  wcsstr(lpCmdLine, L"--portable") != nullptr;
-
-	if (!IsWindows10OrGreater()) {
-		MessageBox(
-			nullptr,
-			L"OBS Studio 28 and newer no longer support Windows 7,"
-			L" Windows 8, or Windows 8.1. You can disable the"
-			L" following setting to opt out of future updates:"
-			L" Settings → General → General → Automatically check"
-			L" for updates on startup",
-			L"Unsupported Operating System", MB_ICONWARNING);
-		return 0;
-	}
+	is32bit = wcsstr(cwd, L"bin\\32bit") != nullptr;
 
 	if (!HasElevation()) {
 
@@ -2048,9 +1759,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int)
 			SYNCHRONIZE, false, L"OBSUpdaterRunningAsNonAdminUser");
 		if (hMutex) {
 			MessageBox(
-				nullptr,
+				nullptr, L"Updater Error",
 				L"OBS Studio Updater must be run as an administrator.",
-				L"Updater Error", MB_ICONWARNING);
+				MB_ICONWARNING);
 			return 2;
 		}
 
@@ -2060,11 +1771,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int)
 		/* return code 1 =  user wanted to launch OBS */
 		if (RestartAsAdmin(lpCmdLine, cwd) == 1) {
 			StringCbCat(cwd, sizeof(cwd), L"\\..\\..");
-			GetFullPathName(cwd, _countof(obs_base_directory),
-					obs_base_directory, nullptr);
-			SetCurrentDirectory(obs_base_directory);
+			GetFullPathName(cwd, _countof(newPath), newPath,
+					nullptr);
+			SetCurrentDirectory(newPath);
 
-			LaunchOBS(isPortable);
+			LaunchOBS();
 		}
 
 		if (hLowMutex) {
@@ -2075,9 +1786,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int)
 		return 0;
 	} else {
 		StringCbCat(cwd, sizeof(cwd), L"\\..\\..");
-		GetFullPathName(cwd, _countof(obs_base_directory),
-				obs_base_directory, nullptr);
-		SetCurrentDirectory(obs_base_directory);
+		GetFullPathName(cwd, _countof(newPath), newPath, nullptr);
+		SetCurrentDirectory(newPath);
 
 		hinstMain = hInstance;
 
@@ -2113,7 +1823,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int)
 		WinHandle hMutex = OpenMutex(
 			SYNCHRONIZE, false, L"OBSUpdaterRunningAsNonAdminUser");
 		if (msg.wParam == 1 && !hMutex) {
-			LaunchOBS(isPortable);
+			LaunchOBS();
 		}
 
 		return (int)msg.wParam;

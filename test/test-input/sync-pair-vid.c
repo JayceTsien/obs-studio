@@ -46,7 +46,6 @@ static inline void fill_texture(uint32_t *pixels, uint32_t pixel)
 
 static void *sync_pair_vid_create(obs_data_t *settings, obs_source_t *source)
 {
-	UNUSED_PARAMETER(settings);
 	struct sync_pair_vid *spv = bzalloc(sizeof(struct sync_pair_vid));
 	spv->source = source;
 
@@ -84,7 +83,6 @@ static inline bool whitelist_time(uint64_t ts, uint64_t interval,
 
 static void sync_pair_vid_render(void *data, gs_effect_t *effect)
 {
-	UNUSED_PARAMETER(effect);
 	struct sync_pair_vid *spv = data;
 
 	uint64_t ts = obs_get_video_frame_time();
@@ -118,7 +116,6 @@ static void sync_pair_vid_render(void *data, gs_effect_t *effect)
 
 static uint32_t sync_pair_vid_size(void *data)
 {
-	UNUSED_PARAMETER(data);
 	return 32;
 }
 

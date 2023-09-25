@@ -25,7 +25,7 @@ resize_buffers_t RealResizeBuffers = nullptr;
 present_t RealPresent = nullptr;
 present1_t RealPresent1 = nullptr;
 
-thread_local int dxgi_presenting = 0;
+thread_local bool dxgi_presenting = false;
 struct ID3D12CommandQueue *dxgi_possible_swap_queues[8]{};
 size_t dxgi_possible_swap_queue_count;
 bool dxgi_present_attempted = false;
@@ -198,13 +198,6 @@ static void update_mismatch_count(bool match)
 static HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain *swap,
 					      UINT sync_interval, UINT flags)
 {
-	if (should_passthrough()) {
-		dxgi_presenting = true;
-		const HRESULT hr = RealPresent(swap, sync_interval, flags);
-		dxgi_presenting = false;
-		return hr;
-	}
-
 	const bool capture_overlay = global_hook_info->capture_overlay;
 	const bool test_draw = (flags & DXGI_PRESENT_TEST) != 0;
 
@@ -230,9 +223,9 @@ static HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain *swap,
 		}
 	}
 
-	++dxgi_presenting;
+	dxgi_presenting = true;
 	const HRESULT hr = RealPresent(swap, sync_interval, flags);
-	--dxgi_presenting;
+	dxgi_presenting = false;
 	dxgi_present_attempted = true;
 
 	if (capture && capture_overlay) {
@@ -262,14 +255,6 @@ static HRESULT STDMETHODCALLTYPE
 hook_present1(IDXGISwapChain1 *swap, UINT sync_interval, UINT flags,
 	      const DXGI_PRESENT_PARAMETERS *params)
 {
-	if (should_passthrough()) {
-		dxgi_presenting = true;
-		const HRESULT hr =
-			RealPresent1(swap, sync_interval, flags, params);
-		dxgi_presenting = false;
-		return hr;
-	}
-
 	const bool capture_overlay = global_hook_info->capture_overlay;
 	const bool test_draw = (flags & DXGI_PRESENT_TEST) != 0;
 
@@ -290,14 +275,16 @@ hook_present1(IDXGISwapChain1 *swap, UINT sync_interval, UINT flags,
 		IUnknown *backbuffer = get_dxgi_backbuffer(swap);
 
 		if (backbuffer) {
+			DXGI_SWAP_CHAIN_DESC1 desc;
+			swap->GetDesc1(&desc);
 			data.capture(swap, backbuffer);
 			backbuffer->Release();
 		}
 	}
 
-	++dxgi_presenting;
+	dxgi_presenting = true;
 	const HRESULT hr = RealPresent1(swap, sync_interval, flags, params);
-	--dxgi_presenting;
+	dxgi_presenting = false;
 	dxgi_present_attempted = true;
 
 	if (capture && capture_overlay) {

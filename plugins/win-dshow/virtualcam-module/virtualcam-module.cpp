@@ -6,12 +6,12 @@
 static const REGPINTYPES AMSMediaTypesV = {&MEDIATYPE_Video,
 					   &MEDIASUBTYPE_NV12};
 
-static const REGFILTERPINS AMSPinVideo = {nullptr, false, true,
-					  false,   false, &CLSID_NULL,
-					  nullptr, 1,     &AMSMediaTypesV};
+static const REGFILTERPINS AMSPinVideo = {L"Output", false, true,
+					  false,     false, &CLSID_NULL,
+					  nullptr,   1,     &AMSMediaTypesV};
 
 HINSTANCE dll_inst = nullptr;
-volatile long locks = 0;
+static volatile long locks = 0;
 
 /* ========================================================================= */
 
@@ -51,12 +51,12 @@ STDMETHODIMP VCamFactory::QueryInterface(REFIID riid, void **p_ptr)
 
 STDMETHODIMP_(ULONG) VCamFactory::AddRef()
 {
-	return os_atomic_inc_long(&refs);
+	return InterlockedIncrement(&refs);
 }
 
 STDMETHODIMP_(ULONG) VCamFactory::Release()
 {
-	long new_refs = os_atomic_dec_long(&refs);
+	long new_refs = InterlockedDecrement(&refs);
 	if (new_refs == 0) {
 		delete this;
 		return 0;
@@ -89,9 +89,9 @@ STDMETHODIMP VCamFactory::CreateInstance(LPUNKNOWN parent, REFIID, void **p_ptr)
 STDMETHODIMP VCamFactory::LockServer(BOOL lock)
 {
 	if (lock) {
-		os_atomic_inc_long(&locks);
+		InterlockedIncrement(&locks);
 	} else {
-		os_atomic_dec_long(&locks);
+		InterlockedDecrement(&locks);
 	}
 
 	return S_OK;
@@ -252,7 +252,7 @@ STDAPI DllInstall(BOOL install, LPCWSTR)
 
 STDAPI DllCanUnloadNow()
 {
-	return os_atomic_load_long(&locks) ? S_FALSE : S_OK;
+	return InterlockedOr(&locks, 0) == 0 ? S_OK : S_FALSE;
 }
 
 STDAPI DllGetClassObject(REFCLSID cls, REFIID riid, void **p_ptr)

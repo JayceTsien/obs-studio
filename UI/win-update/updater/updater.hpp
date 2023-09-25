@@ -21,8 +21,9 @@
 #define _WIN32_WINNT 0x0600
 #define WIN32_LEAN_AND_MEAN
 
+#define ZLIB_CONST
+
 #include <windows.h>
-#include <versionhelpers.h>
 #include <winhttp.h>
 #include <commctrl.h>
 #include <Wincrypt.h>
@@ -32,13 +33,13 @@
 #include <stdlib.h>
 #include <tchar.h>
 #include <strsafe.h>
+#include <zlib.h>
 #include <ctype.h>
 #include <blake2.h>
-#include <zstd.h>
 
 #include <string>
 
-#include "helpers.hpp"
+#include "../win-update-helpers.hpp"
 
 #define BLAKE2_HASH_LENGTH 20
 #define BLAKE2_HASH_STR_LENGTH ((BLAKE2_HASH_LENGTH * 2) + 1)
@@ -88,8 +89,7 @@ void StringToHash(const wchar_t *in, BYTE *out);
 
 bool CalculateFileHash(const wchar_t *path, BYTE *hash);
 
-int ApplyPatch(ZSTD_DCtx *ctx, LPCTSTR patchFile, LPCTSTR targetFile);
-int DecompressFile(ZSTD_DCtx *ctx, LPCTSTR tempFile, size_t newSize);
+int ApplyPatch(LPCTSTR patchFile, LPCTSTR targetFile);
 
 extern HWND hwndMain;
 extern HCRYPTPROV hProvider;
@@ -108,15 +108,3 @@ typedef struct {
 
 void FreeWinHttpHandle(HINTERNET handle);
 using HttpHandle = CustomHandle<HINTERNET, FreeWinHttpHandle>;
-
-/* ------------------------------------------------------------------------ */
-
-class ZSTDDCtx {
-	ZSTD_DCtx *ctx = nullptr;
-
-public:
-	inline ZSTDDCtx() { ctx = ZSTD_createDCtx(); }
-	inline ~ZSTDDCtx() { ZSTD_freeDCtx(ctx); }
-	inline operator ZSTD_DCtx *() const { return ctx; }
-	inline ZSTD_DCtx *get() const { return ctx; }
-};

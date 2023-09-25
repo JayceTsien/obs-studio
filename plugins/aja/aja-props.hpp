@@ -47,7 +47,6 @@ public:
 	uint32_t audioSampleRate;
 	bool autoDetect;
 	bool deactivateWhileNotShowing;
-	bool swapFrontCenterLFE;
 };
 
 class OutputProps {

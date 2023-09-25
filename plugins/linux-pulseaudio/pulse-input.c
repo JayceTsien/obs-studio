@@ -34,7 +34,6 @@ struct pulse_data {
 
 	/* user settings */
 	char *device;
-	bool is_default;
 	bool input;
 
 	/* server info */
@@ -237,9 +236,9 @@ static void pulse_server_info(pa_context *c, const pa_server_info *i,
 	blog(LOG_INFO, "Server name: '%s %s'", i->server_name,
 	     i->server_version);
 
-	if (data->is_default) {
-		bfree(data->device);
+	if (data->device && strcmp("default", data->device) == 0) {
 		if (data->input) {
+			bfree(data->device);
 			data->device = bstrdup(i->default_source_name);
 
 			blog(LOG_DEBUG, "Default input device: '%s'",
@@ -250,6 +249,7 @@ static void pulse_server_info(pa_context *c, const pa_server_info *i,
 			strcat(monitor, i->default_sink_name);
 			strcat(monitor, ".monitor");
 
+			bfree(data->device);
 			data->device = bstrdup(monitor);
 
 			blog(LOG_DEBUG, "Default output device: '%s'",
@@ -379,8 +379,6 @@ static int_fast32_t pulse_start_recording(struct pulse_data *data)
 	attr.tlength = (uint32_t)-1;
 
 	pa_stream_flags_t flags = PA_STREAM_ADJUST_LATENCY;
-	if (!data->is_default)
-		flags |= PA_STREAM_DONT_MOVE;
 
 	pulse_lock();
 	int_fast32_t ret = pa_stream_connect_record(data->stream, data->device,
@@ -392,12 +390,7 @@ static int_fast32_t pulse_start_recording(struct pulse_data *data)
 		return -1;
 	}
 
-	if (data->is_default)
-		blog(LOG_INFO, "Started recording from '%s' (default)",
-		     data->device);
-	else
-		blog(LOG_INFO, "Started recording from '%s'", data->device);
-
+	blog(LOG_INFO, "Started recording from '%s'", data->device);
 	return 0;
 }
 
@@ -554,7 +547,6 @@ static void pulse_update(void *vptr, obs_data_t *settings)
 		if (data->device)
 			bfree(data->device);
 		data->device = bstrdup(new_device);
-		data->is_default = strcmp("default", data->device) == 0;
 		restart = true;
 	}
 

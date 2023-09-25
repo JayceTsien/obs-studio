@@ -17,12 +17,14 @@
 
 #include "obs-internal.h"
 
-static void *gpu_encode_thread(struct obs_core_video_mix *video)
+static void *gpu_encode_thread(void *unused)
 {
-	uint64_t interval = video_output_get_frame_time(video->video);
+	struct obs_core_video *video = &obs->video;
+	uint64_t interval = video_output_get_frame_time(obs->video.video);
 	DARRAY(obs_encoder_t *) encoders;
 	int wait_frames = NUM_ENCODE_TEXTURE_FRAMES_TO_WAIT;
 
+	UNUSED_PARAMETER(unused);
 	da_init(encoders);
 
 	os_set_thread_name("obs gpu encode thread");
@@ -147,11 +149,10 @@ static void *gpu_encode_thread(struct obs_core_video_mix *video)
 	return NULL;
 }
 
-bool init_gpu_encoding(struct obs_core_video_mix *video)
+bool init_gpu_encoding(struct obs_core_video *video)
 {
 #ifdef _WIN32
-	const struct video_output_info *info =
-		video_output_get_info(video->video);
+	struct obs_video_info *ovi = &video->ovi;
 
 	video->gpu_encode_stop = false;
 
@@ -160,15 +161,9 @@ bool init_gpu_encoding(struct obs_core_video_mix *video)
 		gs_texture_t *tex;
 		gs_texture_t *tex_uv;
 
-		if (info->format == VIDEO_FORMAT_P010) {
-			gs_texture_create_p010(
-				&tex, &tex_uv, info->width, info->height,
-				GS_RENDER_TARGET | GS_SHARED_KM_TEX);
-		} else {
-			gs_texture_create_nv12(
-				&tex, &tex_uv, info->width, info->height,
-				GS_RENDER_TARGET | GS_SHARED_KM_TEX);
-		}
+		gs_texture_create_nv12(&tex, &tex_uv, ovi->output_width,
+				       ovi->output_height,
+				       GS_RENDER_TARGET | GS_SHARED_KM_TEX);
 		if (!tex) {
 			return false;
 		}
@@ -188,7 +183,7 @@ bool init_gpu_encoding(struct obs_core_video_mix *video)
 	    0)
 		return false;
 	if (pthread_create(&video->gpu_encode_thread, NULL, gpu_encode_thread,
-			   video) != 0)
+			   NULL) != 0)
 		return false;
 
 	os_event_signal(video->gpu_encode_inactive);
@@ -201,7 +196,7 @@ bool init_gpu_encoding(struct obs_core_video_mix *video)
 #endif
 }
 
-void stop_gpu_encoding_thread(struct obs_core_video_mix *video)
+void stop_gpu_encoding_thread(struct obs_core_video *video)
 {
 	if (video->gpu_encode_thread_initialized) {
 		os_atomic_set_bool(&video->gpu_encode_stop, true);
@@ -211,7 +206,7 @@ void stop_gpu_encoding_thread(struct obs_core_video_mix *video)
 	}
 }
 
-void free_gpu_encoding(struct obs_core_video_mix *video)
+void free_gpu_encoding(struct obs_core_video *video)
 {
 	if (video->gpu_encode_semaphore) {
 		os_sem_destroy(video->gpu_encode_semaphore);

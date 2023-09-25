@@ -137,7 +137,7 @@ void ExtraBrowsersModel::AddDeleteButton(int idx)
 	QModelIndex index = createIndex(idx, (int)Column::Delete, nullptr);
 
 	QPushButton *del = new DelButton(index);
-	del->setProperty("themeID", "removeIconSmall");
+	del->setProperty("themeID", "trashIcon");
 	del->setObjectName("extraPanelDelete");
 	del->setMinimumSize(QSize(20, 20));
 	connect(del, &QPushButton::clicked, this,
@@ -179,6 +179,8 @@ void ExtraBrowsersModel::UpdateItem(Item &item)
 		main->extraBrowserDocks[idx].data());
 	dock->setWindowTitle(item.title);
 	dock->setObjectName(item.title + OBJ_NAME_SUFFIX);
+	dock->setProperty("uuid", item.uuid);
+	main->extraBrowserDockActions[idx]->setText(item.title);
 
 	if (main->extraBrowserDockTargets[idx] != item.url) {
 		dock->cefWidget->setURL(QT_TO_UTF8(item.url));
@@ -224,21 +226,17 @@ void ExtraBrowsersModel::Apply()
 		if (item.prevIdx != -1) {
 			UpdateItem(item);
 		} else {
-			QString uuid = QUuid::createUuid().toString();
-			uuid.replace(QRegularExpression("[{}-]"), "");
-			main->AddExtraBrowserDock(item.title, item.url, uuid,
-						  true);
+			main->AddExtraBrowserDock(item.title, item.url,
+						  item.uuid, true);
 		}
 	}
 
 	for (int i = deleted.size() - 1; i >= 0; i--) {
 		int idx = deleted[i];
+		main->extraBrowserDockActions.removeAt(idx);
 		main->extraBrowserDockTargets.removeAt(idx);
 		main->extraBrowserDocks.removeAt(idx);
 	}
-
-	if (main->extraBrowserDocks.empty())
-		main->extraBrowserMenuDocksSeparator.clear();
 
 	deleted.clear();
 
@@ -442,7 +440,10 @@ OBSExtraBrowsers::OBSExtraBrowsers(QWidget *parent)
 		QAbstractItemView::EditTrigger::CurrentChanged);
 }
 
-OBSExtraBrowsers::~OBSExtraBrowsers() {}
+OBSExtraBrowsers::~OBSExtraBrowsers()
+{
+	delete ui;
+}
 
 void OBSExtraBrowsers::closeEvent(QCloseEvent *event)
 {
@@ -460,6 +461,7 @@ void OBSExtraBrowsers::on_apply_clicked()
 void OBSBasic::ClearExtraBrowserDocks()
 {
 	extraBrowserDockTargets.clear();
+	extraBrowserDockActions.clear();
 	extraBrowserDocks.clear();
 }
 
@@ -475,7 +477,7 @@ void OBSBasic::LoadExtraBrowserDocks()
 
 	Json::array array = json.array_items();
 	if (!array.empty())
-		extraBrowserMenuDocksSeparator = ui->menuDocks->addSeparator();
+		ui->menuDocks->addSeparator();
 
 	for (Json &item : array) {
 		std::string title = item["title"].string_value();
@@ -491,11 +493,11 @@ void OBSBasic::SaveExtraBrowserDocks()
 {
 	Json::array array;
 	for (int i = 0; i < extraBrowserDocks.size(); i++) {
-		QDockWidget *dock = extraBrowserDocks[i].data();
+		QAction *action = extraBrowserDockActions[i].data();
 		QString url = extraBrowserDockTargets[i];
-		QString uuid = dock->property("uuid").toString();
+		QString uuid = action->property("uuid").toString();
 		Json::object obj{
-			{"title", QT_TO_UTF8(dock->windowTitle())},
+			{"title", QT_TO_UTF8(action->text())},
 			{"url", QT_TO_UTF8(url)},
 			{"uuid", QT_TO_UTF8(uuid)},
 		};
@@ -562,9 +564,7 @@ void OBSBasic::AddExtraBrowserDock(const QString &title, const QString &url,
 		}
 	}
 
-	AddDockWidget(dock, Qt::RightDockWidgetArea, true);
-	extraBrowserDocks.push_back(QSharedPointer<QDockWidget>(dock));
-	extraBrowserDockTargets.push_back(url);
+	addDockWidget(Qt::RightDockWidgetArea, dock);
 
 	if (firstCreate) {
 		dock->setFloating(true);
@@ -579,4 +579,15 @@ void OBSBasic::AddExtraBrowserDock(const QString &title, const QString &url,
 		dock->move(curPos);
 		dock->setVisible(true);
 	}
+
+	QAction *action = AddDockWidget(dock);
+	if (firstCreate) {
+		action->blockSignals(true);
+		action->setChecked(true);
+		action->blockSignals(false);
+	}
+
+	extraBrowserDocks.push_back(QSharedPointer<QDockWidget>(dock));
+	extraBrowserDockActions.push_back(QSharedPointer<QAction>(action));
+	extraBrowserDockTargets.push_back(url);
 }

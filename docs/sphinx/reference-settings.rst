@@ -25,8 +25,7 @@ General Functions
 
 .. function:: obs_data_t *obs_data_create()
 
-   :return: A new reference to a data object. Release with
-            :c:func:`obs_data_release()`.
+   :return: A new reference to a data object.
 
 ---------------------
 
@@ -35,8 +34,7 @@ General Functions
    Creates a data object from a Json string.
 
    :param json_string: Json string
-   :return:            A new reference to a data object. Release with
-                       :c:func:`obs_data_release()`.
+   :return:            A new reference to a data object
 
 ---------------------
 
@@ -45,8 +43,7 @@ General Functions
    Creates a data object from a Json file.
 
    :param json_file: Json file path
-   :return:          A new reference to a data object. Release with
-                     :c:func:`obs_data_release()`.
+   :return:          A new reference to a data object
 
 ---------------------
 
@@ -57,8 +54,7 @@ General Functions
 
    :param json_file:  Json file path
    :param backup_ext: Backup file extension
-   :return:           A new reference to a data object. Release with
-                       :c:func:`obs_data_release()`.
+   :return:           A new reference to a data object
 
 ---------------------
 
@@ -180,15 +176,13 @@ Get Functions
 
 .. function:: obs_data_t *obs_data_get_obj(obs_data_t *data, const char *name)
 
-   :return: An incremented reference to a data object. Release with
-            :c:func:`obs_data_release()`.
+   :return: An incremented reference to a data object.
 
 ---------------------
 
 .. function:: obs_data_array_t *obs_data_get_array(obs_data_t *data, const char *name)
 
-   :return: An incremented reference to a data array object. Release
-            with :c:func:`obs_data_array_release()`.
+   :return: An incremented reference to a data array object.
 
 ---------------------
 
@@ -230,8 +224,7 @@ is not set.
 .. function:: void obs_data_set_default_obj(obs_data_t *data, const char *name, obs_data_t *obj)
               obs_data_t *obs_data_get_default_obj(obs_data_t *data, const char *name)
 
-   :return: An incremented reference to a data object. Release with
-            :c:func:`obs_data_release()`.
+   :return: An incremented reference to a data object.
 
 ----------------------
 
@@ -269,8 +262,7 @@ inappropriate or invalid.
 .. function:: void obs_data_set_autoselect_obj(obs_data_t *data, const char *name, obs_data_t *obj)
               obs_data_t *obs_data_get_autoselect_obj(obs_data_t *data, const char *name)
 
-   :return: An incremented reference to a data object. Release with
-            :c:func:`obs_data_release()`.
+   :return: An incremented reference to a data object.
 
 ---------------------
 
@@ -280,8 +272,7 @@ Array Functions
 
 .. function:: obs_data_array_t *obs_data_array_create()
 
-   :return: A new reference to a data array object. Release
-            with :c:func:`obs_data_array_release()`.
+   :return: A new reference to a data array object.
 
 ---------------------
 
@@ -300,7 +291,7 @@ Array Functions
 .. function:: obs_data_t *obs_data_array_item(obs_data_array_t *array, size_t idx)
 
    :return: An incremented reference to the data object associated with
-            this array entry. Release with :c:func:`obs_data_release()`.
+            this array entry.
 
 ---------------------
 

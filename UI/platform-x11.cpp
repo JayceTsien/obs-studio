@@ -53,7 +53,7 @@ using std::vector;
 using std::ostringstream;
 
 #ifdef __linux__
-void CheckIfAlreadyRunning(bool &already_running)
+void RunningInstanceCheck(bool &already_running)
 {
 	int uniq = socket(AF_LOCAL, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 
@@ -133,7 +133,7 @@ struct RunOnce {
 } RO;
 const char *RunOnce::thr_name = "OBS runonce";
 
-void CheckIfAlreadyRunning(bool &already_running)
+void PIDFileCheck(bool &already_running)
 {
 	std::string tmpfile_name =
 		"/tmp/obs-studio.lock." + std::to_string(geteuid());
@@ -178,7 +178,7 @@ static inline bool check_path(const char *data, const char *path,
 	str << path << data;
 	output = str.str();
 
-	blog(LOG_DEBUG, "Attempted path: %s", output.c_str());
+	printf("Attempted path: %s\n", output.c_str());
 
 	return (access(output.c_str(), R_OK) == 0);
 }
@@ -199,6 +199,11 @@ bool GetDataFilePath(const char *data, string &output)
 		return true;
 
 	return false;
+}
+
+bool InitApplicationBundle()
+{
+	return true;
 }
 
 string GetDefaultVideoSavePath()
@@ -251,7 +256,3 @@ bool SetDisplayAffinitySupported(void)
 	// Not implemented yet
 	return false;
 }
-
-// Not implemented yet
-void TaskbarOverlayInit() {}
-void TaskbarOverlaySetStatus(TaskbarOverlayStatus) {}

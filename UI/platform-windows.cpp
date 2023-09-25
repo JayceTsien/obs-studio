@@ -46,7 +46,7 @@ static inline bool check_path(const char *data, const char *path,
 	str << path << data;
 	output = str.str();
 
-	blog(LOG_DEBUG, "Attempted path: %s", output.c_str());
+	printf("Attempted path: %s\n", output.c_str());
 
 	return os_file_exists(output.c_str());
 }
@@ -57,6 +57,11 @@ bool GetDataFilePath(const char *data, string &output)
 		return true;
 
 	return check_path(data, OBS_DATA_PATH "/obs-studio/", output);
+}
+
+bool InitApplicationBundle()
+{
+	return true;
 }
 
 string GetDefaultVideoSavePath()
@@ -169,6 +174,33 @@ uint32_t GetWindowsBuild()
 	}
 
 	return build;
+}
+
+void SetAeroEnabled(bool enable)
+{
+	static HRESULT(WINAPI * func)(UINT) = nullptr;
+	static bool failed = false;
+
+	if (!func) {
+		if (failed) {
+			return;
+		}
+
+		HMODULE dwm = LoadLibraryW(L"dwmapi");
+		if (!dwm) {
+			failed = true;
+			return;
+		}
+
+		func = reinterpret_cast<decltype(func)>(
+			GetProcAddress(dwm, "DwmEnableComposition"));
+		if (!func) {
+			failed = true;
+			return;
+		}
+	}
+
+	func(enable ? DWM_EC_ENABLECOMPOSITION : DWM_EC_DISABLECOMPOSITION);
 }
 
 bool IsAlwaysOnTop(QWidget *window)
@@ -296,7 +328,7 @@ RunOnceMutex &RunOnceMutex::operator=(RunOnceMutex &&rom)
 	return *this;
 }
 
-RunOnceMutex CheckIfAlreadyRunning(bool &already_running)
+RunOnceMutex GetRunOnceMutex(bool &already_running)
 {
 	string name;
 
@@ -356,7 +388,6 @@ static BOOL CALLBACK GetMonitorCallback(HMONITOR monitor, HDC, LPRECT,
 	return true;
 }
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 4, 0)
 #define GENERIC_MONITOR_NAME QStringLiteral("Generic PnP Monitor")
 
 QString GetMonitorName(const QString &id)
@@ -418,7 +449,6 @@ QString GetMonitorName(const QString &id)
 
 	return QString::fromWCharArray(target.monitorFriendlyDeviceName);
 }
-#endif
 
 /* Based on https://www.winehq.org/pipermail/wine-devel/2008-September/069387.html */
 typedef const char *(CDECL *WINEGETVERSION)(void);
@@ -438,59 +468,4 @@ bool IsRunningOnWine()
 	}
 
 	return false;
-}
-
-HWND hwnd;
-void TaskbarOverlayInit()
-{
-	hwnd = (HWND)App()->GetMainWindow()->winId();
-}
-
-void TaskbarOverlaySetStatus(TaskbarOverlayStatus status)
-{
-	ITaskbarList4 *taskbarIcon;
-	auto hr = CoCreateInstance(CLSID_TaskbarList, NULL,
-				   CLSCTX_INPROC_SERVER,
-				   IID_PPV_ARGS(&taskbarIcon));
-
-	if (FAILED(hr)) {
-		taskbarIcon->Release();
-		return;
-	}
-
-	hr = taskbarIcon->HrInit();
-
-	if (FAILED(hr)) {
-		taskbarIcon->Release();
-		return;
-	}
-
-	QIcon qicon;
-	switch (status) {
-	case TaskbarOverlayStatusActive:
-		qicon = QIcon::fromTheme("obs-active",
-					 QIcon(":/res/images/active.png"));
-		break;
-	case TaskbarOverlayStatusPaused:
-		qicon = QIcon::fromTheme("obs-paused",
-					 QIcon(":/res/images/paused.png"));
-		break;
-	case TaskbarOverlayStatusInactive:
-		taskbarIcon->SetOverlayIcon(hwnd, nullptr, nullptr);
-		taskbarIcon->Release();
-		return;
-	}
-
-	HICON hicon = nullptr;
-	if (!qicon.isNull()) {
-		Q_GUI_EXPORT HICON qt_pixmapToWinHICON(const QPixmap &p);
-		hicon = qt_pixmapToWinHICON(
-			qicon.pixmap(GetSystemMetrics(SM_CXSMICON)));
-		if (!hicon)
-			return;
-	}
-
-	taskbarIcon->SetOverlayIcon(hwnd, hicon, nullptr);
-	DestroyIcon(hicon);
-	taskbarIcon->Release();
 }

@@ -19,7 +19,6 @@
 #include <time.h>
 #include <errno.h>
 #include <stdlib.h>
-#include <inttypes.h>
 #include <locale.h>
 #include "c99defs.h"
 #include "platform.h"
@@ -559,8 +558,7 @@ static inline void from_locale(char *buffer)
 double os_strtod(const char *str)
 {
 	char buf[64];
-	strncpy(buf, str, sizeof(buf) - 1);
-	buf[sizeof(buf) - 1] = 0;
+	snprintf(buf, 64, "%s", str);
 	to_locale(buf);
 	return strtod(buf, NULL);
 }
@@ -654,17 +652,28 @@ int os_mkdirs(const char *dir)
 
 const char *os_get_path_extension(const char *path)
 {
-	for (size_t pos = strlen(path); pos > 0; pos--) {
-		switch (path[pos - 1]) {
-		case '.':
-			return path + pos - 1;
-		case '/':
-		case '\\':
-			return NULL;
-		}
-	}
+	struct dstr temp;
+	size_t pos = 0;
+	char *period;
+	char *slash;
 
-	return NULL;
+	if (!path[0])
+		return NULL;
+
+	dstr_init_copy(&temp, path);
+	dstr_replace(&temp, "\\", "/");
+
+	slash = strrchr(temp.array, '/');
+	period = strrchr(temp.array, '.');
+	if (period)
+		pos = (size_t)(period - temp.array);
+
+	dstr_free(&temp);
+
+	if (!period || slash > period)
+		return NULL;
+
+	return path + pos;
 }
 
 static inline bool valid_string(const char *str)
@@ -750,36 +759,29 @@ char *os_generate_formatted_filename(const char *extension, bool space,
 		if (!convert[0]) {
 			if (astrcmp_n(cmp, "%FPS", 4) == 0) {
 				if (ovi.fps_den <= 1) {
-					snprintf(convert, sizeof(convert), "%u",
-						 ovi.fps_num);
+					sprintf(convert, "%u", ovi.fps_num);
 				} else {
 					const double obsFPS =
 						(double)ovi.fps_num /
 						(double)ovi.fps_den;
-					snprintf(convert, sizeof(convert),
-						 "%.2f", obsFPS);
+					sprintf(convert, "%.2f", obsFPS);
 				}
 				replace_text(&sf, pos, 4, convert);
 
 			} else if (astrcmp_n(cmp, "%CRES", 5) == 0) {
-				snprintf(convert, sizeof(convert), "%ux%u",
-					 ovi.base_width, ovi.base_height);
+				sprintf(convert, "%ux%u", ovi.base_width,
+					ovi.base_height);
 				replace_text(&sf, pos, 5, convert);
 
 			} else if (astrcmp_n(cmp, "%ORES", 5) == 0) {
-				snprintf(convert, sizeof(convert), "%ux%u",
-					 ovi.output_width, ovi.output_height);
+				sprintf(convert, "%ux%u", ovi.output_width,
+					ovi.output_height);
 				replace_text(&sf, pos, 5, convert);
 
 			} else if (astrcmp_n(cmp, "%VF", 3) == 0) {
 				strcpy(convert, get_video_format_name(
 							ovi.output_format));
 				replace_text(&sf, pos, 3, convert);
-
-			} else if (astrcmp_n(cmp, "%s", 2) == 0) {
-				snprintf(convert, sizeof(convert), "%" PRId64,
-					 (int64_t)now);
-				replace_text(&sf, pos, 2, convert);
 			}
 		}
 
@@ -796,11 +798,8 @@ char *os_generate_formatted_filename(const char *extension, bool space,
 	if (!space)
 		dstr_replace(&sf, " ", "_");
 
-	if (extension && *extension) {
-		dstr_cat_ch(&sf, '.');
-		dstr_cat(&sf, extension);
-	}
-
+	dstr_cat_ch(&sf, '.');
+	dstr_cat(&sf, extension);
 	dstr_free(&c);
 
 	if (sf.len > 255)

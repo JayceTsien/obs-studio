@@ -152,7 +152,7 @@ void Routing::StartSourceAudio(const SourceProps &props, CNTV2Card *card)
 		audioSys, NTV2InputSourceToAudioSource(inputSrc),
 		NTV2InputSourceToEmbeddedAudioInput(inputSrc));
 
-	card->SetNumberAudioChannels(kDefaultAudioChannels, audioSys);
+	card->SetNumberAudioChannels(props.audioNumChannels, audioSys);
 	card->SetAudioRate(props.AudioRate(), audioSys);
 	card->SetAudioBufferSize(NTV2_AUDIO_BUFFER_BIG, audioSys);
 
@@ -188,7 +188,7 @@ void Routing::StartSourceAudio(const SourceProps &props, CNTV2Card *card)
 
 	for (int a = 0; a < NTV2DeviceGetNumAudioSystems(card->GetDeviceID());
 	     a++) {
-		card->SetAudioLoopBack(NTV2_AUDIO_LOOPBACK_ON,
+		card->SetAudioLoopBack(NTV2_AUDIO_LOOPBACK_OFF,
 				       NTV2AudioSystem(a));
 	}
 
@@ -211,8 +211,11 @@ bool Routing::ConfigureSourceRoute(const SourceProps &props, NTV2Mode mode,
 	if (!card)
 		return false;
 
+	bool found_preset = false;
 	auto deviceID = props.deviceID;
 	NTV2VideoFormat vf = props.videoFormat;
+	bool is_hfr = NTV2_IS_HIGH_NTV2FrameRate(
+		GetNTV2FrameRateFromVideoFormat(props.videoFormat));
 	auto init_src = props.InitialInputSource();
 	auto init_channel = props.Channel();
 
@@ -230,7 +233,7 @@ bool Routing::ConfigureSourceRoute(const SourceProps &props, NTV2Mode mode,
 		}
 		if (vpidStandard == VPIDStandard_Unknown) {
 			vpidStandard = DetermineVPIDStandard(
-				props.ioSelect, props.videoFormat,
+				deviceID, props.ioSelect, props.videoFormat,
 				props.pixelFormat, props.sdiTransport,
 				props.sdi4kTransport);
 		}
@@ -352,7 +355,10 @@ bool Routing::ConfigureOutputRoute(const OutputProps &props, NTV2Mode mode,
 	if (!card)
 		return false;
 
+	bool found_preset = false;
 	auto deviceID = props.deviceID;
+	bool is_hfr = NTV2_IS_HIGH_NTV2FrameRate(
+		GetNTV2FrameRateFromVideoFormat(props.videoFormat));
 	NTV2OutputDestinations outputDests;
 	aja::IOSelectionToOutputDests(props.ioSelect, outputDests);
 	if (outputDests.empty()) {
@@ -369,9 +375,11 @@ bool Routing::ConfigureOutputRoute(const OutputProps &props, NTV2Mode mode,
 	HDMIWireFormat hwf = HDMIWireFormat::Unknown;
 	if (NTV2_OUTPUT_DEST_IS_SDI(init_dest)) {
 		kind = ConnectionKind::SDI;
-		vpidStandard = DetermineVPIDStandard(
-			props.ioSelect, props.videoFormat, props.pixelFormat,
-			props.sdiTransport, props.sdi4kTransport);
+		vpidStandard = DetermineVPIDStandard(deviceID, props.ioSelect,
+						     props.videoFormat,
+						     props.pixelFormat,
+						     props.sdiTransport,
+						     props.sdi4kTransport);
 	} else if (NTV2_OUTPUT_DEST_IS_HDMI(init_dest)) {
 		kind = ConnectionKind::HDMI;
 		hwf = HDMIWireFormat::Unknown;

@@ -86,7 +86,10 @@ AutoConfigStartPage::AutoConfigStartPage(QWidget *parent)
 	}
 }
 
-AutoConfigStartPage::~AutoConfigStartPage() {}
+AutoConfigStartPage::~AutoConfigStartPage()
+{
+	delete ui;
+}
 
 int AutoConfigStartPage::nextId() const
 {
@@ -150,12 +153,8 @@ AutoConfigVideoPage::AutoConfigVideoPage(QWidget *parent)
 	QString cyStr = QString::number(ovi.base_height);
 
 	int encRes = int(ovi.base_width << 16) | int(ovi.base_height);
-
-	// Auto config only supports testing down to 240p, don't allow current
-	// resolution if it's lower than that.
-	if (ovi.base_height >= 240)
-		ui->canvasRes->addItem(QTStr(RES_USE_CURRENT).arg(cxStr, cyStr),
-				       (int)encRes);
+	ui->canvasRes->addItem(QTStr(RES_USE_CURRENT).arg(cxStr, cyStr),
+			       (int)encRes);
 
 	QList<QScreen *> screens = QGuiApplication::screens();
 	for (int i = 0; i < screens.size(); i++) {
@@ -192,7 +191,10 @@ AutoConfigVideoPage::AutoConfigVideoPage(QWidget *parent)
 	ui->canvasRes->setCurrentIndex(0);
 }
 
-AutoConfigVideoPage::~AutoConfigVideoPage() {}
+AutoConfigVideoPage::~AutoConfigVideoPage()
+{
+	delete ui;
+}
 
 int AutoConfigVideoPage::nextId() const
 {
@@ -314,7 +316,10 @@ AutoConfigStreamPage::AutoConfigStreamPage(QWidget *parent)
 		SLOT(UpdateCompleted()));
 }
 
-AutoConfigStreamPage::~AutoConfigStreamPage() {}
+AutoConfigStreamPage::~AutoConfigStreamPage()
+{
+	delete ui;
+}
 
 bool AutoConfigStreamPage::isComplete() const
 {
@@ -969,7 +974,7 @@ AutoConfig::AutoConfig(QWidget *parent) : QWizard(parent)
 		/* Newer generations of NVENC have a high enough quality to
 		 * bitrate ratio that if NVENC is available, it makes sense to
 		 * just always prefer hardware encoding by default */
-		bool preferHardware = nvencAvailable || appleAvailable ||
+		bool preferHardware = nvencAvailable ||
 				      os_get_physical_cores() <= 4;
 		streamPage->ui->preferHardware->setChecked(preferHardware);
 	}
@@ -998,20 +1003,8 @@ void AutoConfig::TestHardwareEncoding()
 			hardwareEncodingAvailable = nvencAvailable = true;
 		else if (strcmp(id, "obs_qsv11") == 0)
 			hardwareEncodingAvailable = qsvAvailable = true;
-		else if (strcmp(id, "h264_texture_amf") == 0)
+		else if (strcmp(id, "amd_amf_h264") == 0)
 			hardwareEncodingAvailable = vceAvailable = true;
-#ifdef __APPLE__
-		else if (strcmp(id,
-				"com.apple.videotoolbox.videoencoder.ave.avc") ==
-				 0
-#ifndef __aarch64__
-			 && os_get_emulation_status() == true
-#endif
-		)
-			if (__builtin_available(macOS 13.0, *))
-				hardwareEncodingAvailable = appleAvailable =
-					true;
-#endif
 	}
 }
 
@@ -1059,8 +1052,6 @@ inline const char *AutoConfig::GetEncoderId(Encoder enc)
 		return SIMPLE_ENCODER_QSV;
 	case Encoder::AMD:
 		return SIMPLE_ENCODER_AMD;
-	case Encoder::Apple:
-		return SIMPLE_ENCODER_APPLE_H264;
 	default:
 		return SIMPLE_ENCODER_X264;
 	}

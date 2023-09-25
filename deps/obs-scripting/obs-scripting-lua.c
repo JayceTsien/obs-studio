@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include "obs-scripting-lua.h"
+#include "obs-scripting-config.h"
 #include <util/platform.h>
 #include <util/base.h>
 #include <util/dstr.h>
@@ -31,21 +32,19 @@
 #endif
 
 #ifdef __APPLE__
-#define SO_EXT "so"
+#define SO_EXT "dylib"
 #elif _WIN32
-#include <windows.h>
 #define SO_EXT "dll"
 #else
 #define SO_EXT "so"
 #endif
 
-static const char *startup_script_template =
-	"\
+static const char *startup_script_template = "\
 for val in pairs(package.preload) do\n\
 	package.preload[val] = nil\n\
 end\n\
-package.cpath = package.cpath .. \";\" .. \"%s/?." SO_EXT
-	"\" .. \";\" .. \"%s\" .. \"/?." SO_EXT "\"\n\
+package.cpath = package.cpath .. \";\" .. \"%s/Contents/MacOS/?.so\" .. \";\" .. \"%s\" .. \"/?." SO_EXT
+					     "\"\n\
 require \"obslua\"\n";
 
 static const char *get_script_path_func = "\
@@ -76,7 +75,7 @@ static void add_hook_functions(lua_State *script);
 static int obs_lua_remove_tick_callback(lua_State *script);
 static int obs_lua_remove_main_render_callback(lua_State *script);
 
-#ifdef ENABLE_UI
+#if UI_ENABLED
 void add_lua_frontend_funcs(lua_State *script);
 #endif
 
@@ -85,7 +84,6 @@ static bool load_lua_script(struct obs_lua_script *data)
 	struct dstr str = {0};
 	bool success = false;
 	int ret;
-	char *file_data;
 
 	lua_State *script = luaL_newstate();
 	if (!script) {
@@ -118,25 +116,15 @@ static bool load_lua_script(struct obs_lua_script *data)
 
 	add_lua_source_functions(script);
 	add_hook_functions(script);
-#ifdef ENABLE_UI
+#if UI_ENABLED
 	add_lua_frontend_funcs(script);
 #endif
 
-	file_data = os_quick_read_utf8_file(data->base.path.array);
-	if (!file_data) {
-		script_warn(&data->base, "Error opening file: %s",
-			    lua_tostring(script, -1));
-		goto fail;
-	}
-
-	if (luaL_loadbuffer(script, file_data, strlen(file_data),
-			    data->base.path.array) != 0) {
+	if (luaL_loadfile(script, data->base.path.array) != 0) {
 		script_warn(&data->base, "Error loading file: %s",
 			    lua_tostring(script, -1));
-		bfree(file_data);
 		goto fail;
 	}
-	bfree(file_data);
 
 	if (lua_pcall(script, 0, LUA_MULTRET, 0) != 0) {
 		script_warn(&data->base, "Error running file: %s",
@@ -654,17 +642,6 @@ static int scene_enum_items(lua_State *script)
 	return 1;
 }
 
-static int sceneitem_group_enum_items(lua_State *script)
-{
-	obs_sceneitem_t *sceneitem;
-	if (!ls_get_libobs_obj(obs_sceneitem_t, 1, &sceneitem))
-		return 0;
-
-	lua_newtable(script);
-	obs_sceneitem_group_enum_items(sceneitem, enum_items_proc, script);
-	return 1;
-}
-
 /* -------------------------------------------- */
 
 static void defer_hotkey_unregister(void *p_cb)
@@ -1035,7 +1012,6 @@ static void add_hook_functions(lua_State *script)
 	add_func("obs_enum_sources", enum_sources);
 	add_func("obs_source_enum_filters", source_enum_filters);
 	add_func("obs_scene_enum_items", scene_enum_items);
-	add_func("obs_sceneitem_group_enum_items", sceneitem_group_enum_items);
 	add_func("source_list_release", source_list_release);
 	add_func("sceneitem_list_release", sceneitem_list_release);
 	add_func("calldata_source", calldata_source);
@@ -1129,11 +1105,8 @@ bool obs_lua_script_load(obs_script_t *s)
 	struct obs_lua_script *data = (struct obs_lua_script *)s;
 	if (!data->base.loaded) {
 		data->base.loaded = load_lua_script(data);
-		if (data->base.loaded) {
-			blog(LOG_INFO, "[obs-scripting]: Loaded lua script: %s",
-			     data->base.file.array);
+		if (data->base.loaded)
 			obs_lua_script_update(s, NULL);
-		}
 	}
 
 	return data->base.loaded;
@@ -1228,12 +1201,9 @@ void obs_lua_script_unload(obs_script_t *s)
 	/* call script_unload           */
 
 	pthread_mutex_lock(&data->mutex);
-	current_lua_script = data;
 
 	lua_getglobal(script, "script_unload");
 	lua_pcall(script, 0, 0, 0);
-
-	current_lua_script = NULL;
 
 	/* ---------------------------- */
 	/* remove all callbacks         */
@@ -1253,9 +1223,6 @@ void obs_lua_script_unload(obs_script_t *s)
 
 	lua_close(script);
 	s->loaded = false;
-
-	blog(LOG_INFO, "[obs-scripting]: Unloaded lua script: %s",
-	     data->base.file.array);
 }
 
 void obs_lua_script_destroy(obs_script_t *s)
@@ -1345,6 +1312,7 @@ void obs_lua_script_save(obs_script_t *s)
 
 void obs_lua_load(void)
 {
+	struct dstr dep_paths = {0};
 	struct dstr tmp = {0};
 
 	pthread_mutex_init(&tick_mutex, NULL);
@@ -1354,29 +1322,34 @@ void obs_lua_load(void)
 	/* ---------------------------------------------- */
 	/* Initialize Lua startup script                  */
 
-#if _WIN32
-#define PATH_MAX MAX_PATH
-#endif
-
-	char import_path[PATH_MAX];
+	char *bundlePath = "./";
 
 #ifdef __APPLE__
-	struct dstr bundle_path;
+	Class nsRunningApplication = objc_lookUpClass("NSRunningApplication");
+	SEL currentAppSel = sel_getUid("currentApplication");
 
-	dstr_init_move_array(&bundle_path, os_get_executable_path_ptr(""));
-	dstr_cat(&bundle_path, "../PlugIns");
-	char *absolute_plugin_path = os_get_abs_path_ptr(bundle_path.array);
+	typedef id (*running_app_func)(Class, SEL);
+	running_app_func operatingSystemName = (running_app_func)objc_msgSend;
+	id app = operatingSystemName(nsRunningApplication, currentAppSel);
 
-	if (absolute_plugin_path != NULL) {
-		strcpy(import_path, absolute_plugin_path);
-		bfree(absolute_plugin_path);
-	}
-	dstr_free(&bundle_path);
-#else
-	strcpy(import_path, "./");
+	typedef id (*bundle_url_func)(id, SEL);
+	bundle_url_func bundleURL = (bundle_url_func)objc_msgSend;
+	id url = bundleURL(app, sel_getUid("bundleURL"));
+
+	typedef id (*url_path_func)(id, SEL);
+	url_path_func urlPath = (url_path_func)objc_msgSend;
+
+	id path = urlPath(url, sel_getUid("path"));
+
+	typedef id (*string_func)(id, SEL);
+	string_func utf8String = (string_func)objc_msgSend;
+	bundlePath = (char *)utf8String(path, sel_registerName("UTF8String"));
 #endif
-	dstr_printf(&tmp, startup_script_template, import_path, SCRIPT_DIR);
+
+	dstr_printf(&tmp, startup_script_template, bundlePath, SCRIPT_DIR);
 	startup_script = tmp.array;
+
+	dstr_free(&dep_paths);
 
 	obs_add_tick_callback(lua_tick, NULL);
 }

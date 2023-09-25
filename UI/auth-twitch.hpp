@@ -15,6 +15,14 @@ class TwitchAuth : public OAuthStreamKey {
 
 	friend class TwitchLogin;
 
+	QSharedPointer<BrowserDock> chat;
+	QSharedPointer<BrowserDock> info;
+	QSharedPointer<BrowserDock> stat;
+	QSharedPointer<BrowserDock> feed;
+	QSharedPointer<QAction> chatMenu;
+	QSharedPointer<QAction> infoMenu;
+	QSharedPointer<QAction> statMenu;
+	QSharedPointer<QAction> feedMenu;
 	bool uiLoaded = false;
 
 	std::string name;
@@ -32,7 +40,6 @@ class TwitchAuth : public OAuthStreamKey {
 
 public:
 	TwitchAuth(const Def &d);
-	~TwitchAuth();
 
 	static std::shared_ptr<Auth> Login(QWidget *parent,
 					   const std::string &service_name);

@@ -12,7 +12,7 @@
 class QGridLayout;
 class QCloseEvent;
 
-class OBSBasicStats : public QFrame {
+class OBSBasicStats : public QWidget {
 	Q_OBJECT
 
 	QLabel *fps = nullptr;

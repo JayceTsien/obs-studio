@@ -33,16 +33,11 @@ OBSAbout::OBSAbout(QWidget *parent) : QDialog(parent), ui(new Ui::OBSAbout)
 	ui->version->setText(ver + bitness);
 
 	ui->contribute->setText(QTStr("About.Contribute"));
-
-	if (steam) {
-		delete ui->donate;
-	} else {
-		ui->donate->setText(
-			"&nbsp;&nbsp;<a href='https://obsproject.com/contribute'>" +
-			QTStr("About.Donate") + "</a>");
-		ui->donate->setTextInteractionFlags(Qt::TextBrowserInteraction);
-		ui->donate->setOpenExternalLinks(true);
-	}
+	ui->donate->setText(
+		"&nbsp;&nbsp;<a href='https://obsproject.com/contribute'>" +
+		QTStr("About.Donate") + "</a>");
+	ui->donate->setTextInteractionFlags(Qt::TextBrowserInteraction);
+	ui->donate->setOpenExternalLinks(true);
 
 	ui->getInvolved->setText(
 		"&nbsp;&nbsp;<a href='https://github.com/obsproject/obs-studio/blob/master/CONTRIBUTING.rst'>" +
@@ -133,15 +128,10 @@ void OBSAbout::ShowAbout()
 void OBSAbout::ShowAuthors()
 {
 	std::string path;
-	QString error =
-		QTStr("About.Error")
-			.arg("https://github.com/obsproject/obs-studio/blob/master/AUTHORS");
+	QString error = "Error! File could not be read.\n\n \
+		Go to: https://github.com/obsproject/obs-studio/blob/master/AUTHORS";
 
-#ifdef __APPLE__
-	if (!GetDataFilePath("AUTHORS", path)) {
-#else
 	if (!GetDataFilePath("authors/AUTHORS", path)) {
-#endif
 		ui->textBrowser->setPlainText(error);
 		return;
 	}
@@ -161,9 +151,8 @@ void OBSAbout::ShowAuthors()
 void OBSAbout::ShowLicense()
 {
 	std::string path;
-	QString error =
-		QTStr("About.Error")
-			.arg("https://github.com/obsproject/obs-studio/blob/master/COPYING");
+	QString error = "Error! File could not be read.\n\n \
+		Go to: https://github.com/obsproject/obs-studio/blob/master/COPYING";
 
 	if (!GetDataFilePath("license/gplv2.txt", path)) {
 		ui->textBrowser->setPlainText(error);

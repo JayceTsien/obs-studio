@@ -15,7 +15,6 @@ struct cursor_data {
 	long x_hotspot;
 	long y_hotspot;
 	bool visible;
-	bool monochrome;
 
 	uint32_t last_cx;
 	uint32_t last_cy;

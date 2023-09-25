@@ -5,7 +5,6 @@
 
 /* clang-format off */
 
-#define SETTING_SDR_ONLY_INFO          "sdr_only_info"
 #define SETTING_OPACITY                "opacity"
 #define SETTING_CONTRAST               "contrast"
 #define SETTING_BRIGHTNESS             "brightness"
@@ -16,7 +15,6 @@
 #define SETTING_SMOOTHNESS             "smoothness"
 #define SETTING_SPILL                  "spill"
 
-#define TEXT_SDR_ONLY_INFO             obs_module_text("SdrOnlyInfo")
 #define TEXT_OPACITY                   obs_module_text("Opacity")
 #define TEXT_CONTRAST                  obs_module_text("Contrast")
 #define TEXT_BRIGHTNESS                obs_module_text("Brightness")
@@ -367,60 +365,36 @@ static void chroma_key_render_v1(void *data, gs_effect_t *effect)
 
 static void chroma_key_render_v2(void *data, gs_effect_t *effect)
 {
-	UNUSED_PARAMETER(effect);
-
 	struct chroma_key_filter_data_v2 *filter = data;
 	obs_source_t *target = obs_filter_get_target(filter->context);
 	uint32_t width = obs_source_get_base_width(target);
 	uint32_t height = obs_source_get_base_height(target);
 	struct vec2 pixel_size;
 
-	const enum gs_color_space preferred_spaces[] = {
-		GS_CS_SRGB,
-		GS_CS_SRGB_16F,
-		GS_CS_709_EXTENDED,
-	};
+	if (!obs_source_process_filter_begin(filter->context, GS_RGBA,
+					     OBS_ALLOW_DIRECT_RENDERING))
+		return;
 
-	const enum gs_color_space source_space = obs_source_get_color_space(
-		obs_filter_get_target(filter->context),
-		OBS_COUNTOF(preferred_spaces), preferred_spaces);
-	if (source_space == GS_CS_709_EXTENDED) {
-		obs_source_skip_video_filter(filter->context);
-	} else {
-		const enum gs_color_format format =
-			gs_get_format_from_space(source_space);
-		if (obs_source_process_filter_begin_with_color_space(
-			    filter->context, format, source_space,
-			    OBS_ALLOW_DIRECT_RENDERING)) {
-			vec2_set(&pixel_size, 1.0f / (float)width,
-				 1.0f / (float)height);
+	vec2_set(&pixel_size, 1.0f / (float)width, 1.0f / (float)height);
 
-			gs_effect_set_float(filter->opacity_param,
-					    filter->opacity);
-			gs_effect_set_float(filter->contrast_param,
-					    filter->contrast);
-			gs_effect_set_float(filter->brightness_param,
-					    filter->brightness);
-			gs_effect_set_float(filter->gamma_param, filter->gamma);
-			gs_effect_set_vec2(filter->chroma_param,
-					   &filter->chroma);
-			gs_effect_set_vec2(filter->pixel_size_param,
-					   &pixel_size);
-			gs_effect_set_float(filter->similarity_param,
-					    filter->similarity);
-			gs_effect_set_float(filter->smoothness_param,
-					    filter->smoothness);
-			gs_effect_set_float(filter->spill_param, filter->spill);
+	gs_effect_set_float(filter->opacity_param, filter->opacity);
+	gs_effect_set_float(filter->contrast_param, filter->contrast);
+	gs_effect_set_float(filter->brightness_param, filter->brightness);
+	gs_effect_set_float(filter->gamma_param, filter->gamma);
+	gs_effect_set_vec2(filter->chroma_param, &filter->chroma);
+	gs_effect_set_vec2(filter->pixel_size_param, &pixel_size);
+	gs_effect_set_float(filter->similarity_param, filter->similarity);
+	gs_effect_set_float(filter->smoothness_param, filter->smoothness);
+	gs_effect_set_float(filter->spill_param, filter->spill);
 
-			gs_blend_state_push();
-			gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+	gs_blend_state_push();
+	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
 
-			obs_source_process_filter_end(filter->context,
-						      filter->effect, 0, 0);
+	obs_source_process_filter_end(filter->context, filter->effect, 0, 0);
 
-			gs_blend_state_pop();
-		}
-	}
+	gs_blend_state_pop();
+
+	UNUSED_PARAMETER(effect);
 }
 
 static bool key_type_changed(obs_properties_t *props, obs_property_t *p,
@@ -447,8 +421,7 @@ static obs_properties_t *chroma_key_properties_v1(void *data)
 	obs_property_list_add_string(p, obs_module_text("Green"), "green");
 	obs_property_list_add_string(p, obs_module_text("Blue"), "blue");
 	obs_property_list_add_string(p, obs_module_text("Magenta"), "magenta");
-	obs_property_list_add_string(p, obs_module_text("CustomColor"),
-				     "custom");
+	obs_property_list_add_string(p, obs_module_text("Custom"), "custom");
 
 	obs_property_set_modified_callback(p, key_type_changed);
 
@@ -477,9 +450,6 @@ static obs_properties_t *chroma_key_properties_v2(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
 
-	obs_properties_add_text(props, SETTING_SDR_ONLY_INFO,
-				TEXT_SDR_ONLY_INFO, OBS_TEXT_INFO);
-
 	obs_property_t *p = obs_properties_add_list(props, SETTING_COLOR_TYPE,
 						    TEXT_COLOR_TYPE,
 						    OBS_COMBO_TYPE_LIST,
@@ -487,8 +457,7 @@ static obs_properties_t *chroma_key_properties_v2(void *data)
 	obs_property_list_add_string(p, obs_module_text("Green"), "green");
 	obs_property_list_add_string(p, obs_module_text("Blue"), "blue");
 	obs_property_list_add_string(p, obs_module_text("Magenta"), "magenta");
-	obs_property_list_add_string(p, obs_module_text("CustomColor"),
-				     "custom");
+	obs_property_list_add_string(p, obs_module_text("Custom"), "custom");
 
 	obs_property_set_modified_callback(p, key_type_changed);
 
@@ -539,27 +508,6 @@ static void chroma_key_defaults_v2(obs_data_t *settings)
 	obs_data_set_default_int(settings, SETTING_SPILL, 100);
 }
 
-static enum gs_color_space
-chroma_key_get_color_space(void *data, size_t count,
-			   const enum gs_color_space *preferred_spaces)
-{
-	UNUSED_PARAMETER(count);
-	UNUSED_PARAMETER(preferred_spaces);
-
-	const enum gs_color_space potential_spaces[] = {
-		GS_CS_SRGB,
-		GS_CS_SRGB_16F,
-		GS_CS_709_EXTENDED,
-	};
-
-	struct chroma_key_filter_data_v2 *const filter = data;
-	const enum gs_color_space source_space = obs_source_get_color_space(
-		obs_filter_get_target(filter->context),
-		OBS_COUNTOF(potential_spaces), potential_spaces);
-
-	return source_space;
-}
-
 struct obs_source_info chroma_key_filter = {
 	.id = "chroma_key_filter",
 	.type = OBS_SOURCE_TYPE_FILTER,
@@ -585,5 +533,4 @@ struct obs_source_info chroma_key_filter_v2 = {
 	.update = chroma_key_update_v2,
 	.get_properties = chroma_key_properties_v2,
 	.get_defaults = chroma_key_defaults_v2,
-	.video_get_color_space = chroma_key_get_color_space,
 };

@@ -5,7 +5,6 @@
 #include <QInputEvent>
 #include <QtCore/QObject>
 #include <QAccessibleWidget>
-#include <QStyleOptionSlider>
 
 class SliderIgnoreScroll : public QSlider {
 	Q_OBJECT
@@ -49,21 +48,4 @@ private:
 protected:
 	virtual QAccessible::Role role() const override;
 	virtual QString text(QAccessible::Text t) const override;
-};
-
-class SliderIgnoreClick : public SliderIgnoreScroll {
-public:
-	inline SliderIgnoreClick(Qt::Orientation orientation,
-				 QWidget *parent = nullptr)
-		: SliderIgnoreScroll(orientation, parent)
-	{
-	}
-
-protected:
-	virtual void mousePressEvent(QMouseEvent *event) override;
-	virtual void mouseReleaseEvent(QMouseEvent *event) override;
-	virtual void mouseMoveEvent(QMouseEvent *event) override;
-
-private:
-	bool dragging = false;
 };

@@ -8,8 +8,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <errno.h>
-#include <string.h>
 
 struct virtualcam_data {
 	obs_output_t *output;
@@ -77,7 +75,8 @@ static bool loopback_module_loaded()
 		}
 	}
 
-	fclose(fp);
+	if (fp)
+		fclose(fp);
 
 	return loaded;
 }
@@ -129,12 +128,12 @@ static bool try_connect(void *data, const char *device)
 		return false;
 
 	if (ioctl(vcam->device, VIDIOC_QUERYCAP, &capability) < 0)
-		goto fail_close_device;
+		return false;
 
 	format.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
 
 	if (ioctl(vcam->device, VIDIOC_G_FMT, &format) < 0)
-		goto fail_close_device;
+		return false;
 
 	struct obs_video_info ovi;
 	obs_get_video_info(&ovi);
@@ -147,7 +146,7 @@ static bool try_connect(void *data, const char *device)
 	parm.parm.output.timeperframe.denominator = ovi.fps_num;
 
 	if (ioctl(vcam->device, VIDIOC_S_PARM, &parm) < 0)
-		goto fail_close_device;
+		return false;
 
 	format.fmt.pix.width = width;
 	format.fmt.pix.height = height;
@@ -155,7 +154,7 @@ static bool try_connect(void *data, const char *device)
 	format.fmt.pix.sizeimage = vcam->frame_size;
 
 	if (ioctl(vcam->device, VIDIOC_S_FMT, &format) < 0)
-		goto fail_close_device;
+		return false;
 
 	struct video_scale_info vsi = {0};
 	vsi.format = VIDEO_FORMAT_YUY2;
@@ -163,23 +162,10 @@ static bool try_connect(void *data, const char *device)
 	vsi.height = height;
 	obs_output_set_video_conversion(vcam->output, &vsi);
 
-	memset(&parm, 0, sizeof(parm));
-	parm.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-
-	if (ioctl(vcam->device, VIDIOC_STREAMON, &parm) < 0) {
-		blog(LOG_ERROR, "Failed to start streaming on '%s' (%s)",
-		     device, strerror(errno));
-		goto fail_close_device;
-	}
-
 	blog(LOG_INFO, "Virtual camera started");
 	obs_output_begin_data_capture(vcam->output, 0);
 
 	return true;
-
-fail_close_device:
-	close(vcam->device);
-	return false;
 }
 
 static int scanfilter(const struct dirent *entry)
@@ -211,14 +197,9 @@ static bool virtualcam_start(void *data)
 		return false;
 
 	for (int i = 0; i < n; i++) {
-		char device[32] = {0};
+		char device[32];
 
-		// Use the return value of snprintf to prevent truncation warning.
-		int written = snprintf(device, 32, "/dev/%s", list[i]->d_name);
-		if (written >= 32)
-			blog(LOG_DEBUG,
-			     "v4l2-output: A format truncation may have occurred."
-			     " This can be ignored since it is quite improbable.");
+		snprintf(device, 32, "/dev/%s", list[i]->d_name);
 
 		if (try_connect(vcam, device)) {
 			success = true;
@@ -240,17 +221,8 @@ static void virtualcam_stop(void *data, uint64_t ts)
 {
 	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
 	obs_output_end_data_capture(vcam->output);
-
-	struct v4l2_streamparm parm = {0};
-	parm.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-
-	if (ioctl(vcam->device, VIDIOC_STREAMOFF, &parm) < 0) {
-		blog(LOG_WARNING,
-		     "Failed to stop streaming on video device %d (%s)",
-		     vcam->device, strerror(errno));
-	}
-
 	close(vcam->device);
+
 	blog(LOG_INFO, "Virtual camera stopped");
 
 	UNUSED_PARAMETER(ts);

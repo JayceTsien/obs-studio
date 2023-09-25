@@ -61,6 +61,7 @@ public:
 			update_timer->stop();
 			QMetaObject::invokeMethod(update_timer, "timeout");
 			update_timer->deleteLater();
+			obs_data_release(old_settings_cache);
 		}
 	}
 
@@ -77,7 +78,8 @@ public slots:
 	void EditListEdit();
 	void EditListUp();
 	void EditListDown();
-	void EditListReordered();
+	void EditListReordered(const QModelIndex &parent, int start, int end,
+			       const QModelIndex &destination, int row);
 };
 
 /* ------------------------------------------------------------------------- */
@@ -137,14 +139,12 @@ private:
 
 	void resizeEvent(QResizeEvent *event) override;
 
-	void GetScrollPos(int &h, int &v, int &hend, int &vend);
-	void SetScrollPos(int h, int v, int old_hend, int old_vend);
-
-private slots:
-	void RefreshProperties();
+	void GetScrollPos(int &h, int &v);
+	void SetScrollPos(int h, int v);
 
 public slots:
 	void ReloadProperties();
+	void RefreshProperties();
 	void SignalChanged();
 
 signals:

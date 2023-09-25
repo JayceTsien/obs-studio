@@ -21,13 +21,11 @@
 #include <intrin.h>
 #include <psapi.h>
 #include <math.h>
-#include <rpc.h>
 
 #include "base.h"
 #include "platform.h"
 #include "darray.h"
 #include "dstr.h"
-#include "obsconfig.h"
 #include "util_uint64.h"
 #include "windows/win-registry.h"
 #include "windows/win-version.h"
@@ -138,145 +136,7 @@ void os_dlclose(void *module)
 	FreeLibrary(module);
 }
 
-#if OBS_QT_VERSION == 6
-static bool has_qt5_import(VOID *base, PIMAGE_NT_HEADERS nt_headers)
-{
-	__try {
-		PIMAGE_DATA_DIRECTORY data_dir;
-		data_dir =
-			&nt_headers->OptionalHeader
-				 .DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-
-		if (data_dir->Size == 0)
-			return false;
-
-		PIMAGE_SECTION_HEADER section, last_section;
-		section = IMAGE_FIRST_SECTION(nt_headers);
-		last_section = section;
-
-		/* find the section that contains the export directory */
-		int i;
-		for (i = 0; i < nt_headers->FileHeader.NumberOfSections; i++) {
-			if (section->VirtualAddress <=
-			    data_dir->VirtualAddress) {
-				last_section = section;
-				section++;
-				continue;
-			} else {
-				break;
-			}
-		}
-
-		/* double check in case we exited early */
-		if (last_section->VirtualAddress > data_dir->VirtualAddress ||
-		    section->VirtualAddress <= data_dir->VirtualAddress)
-			return false;
-
-		section = last_section;
-
-		/* get a pointer to the import directory */
-		PIMAGE_IMPORT_DESCRIPTOR import;
-		import = (PIMAGE_IMPORT_DESCRIPTOR)((byte *)base +
-						    data_dir->VirtualAddress -
-						    section->VirtualAddress +
-						    section->PointerToRawData);
-
-		while (import->Name != 0) {
-			char *name = (char *)((byte *)base + import->Name -
-					      section->VirtualAddress +
-					      section->PointerToRawData);
-
-			/* qt5? bingo, reject this library */
-			if (astrcmpi_n(name, "qt5", 3) == 0) {
-				return true;
-			}
-
-			import++;
-		}
-
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		/* we failed somehow, for compatibility assume no qt5 import */
-		return false;
-	}
-
-	return false;
-}
-#endif
-
-static bool has_obs_export(VOID *base, PIMAGE_NT_HEADERS nt_headers)
-{
-	__try {
-		PIMAGE_DATA_DIRECTORY data_dir;
-		data_dir =
-			&nt_headers->OptionalHeader
-				 .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-
-		if (data_dir->Size == 0)
-			return false;
-
-		PIMAGE_SECTION_HEADER section, last_section;
-		section = IMAGE_FIRST_SECTION(nt_headers);
-		last_section = section;
-
-		/* find the section that contains the export directory */
-		int i;
-		for (i = 0; i < nt_headers->FileHeader.NumberOfSections; i++) {
-			if (section->VirtualAddress <=
-			    data_dir->VirtualAddress) {
-				last_section = section;
-				section++;
-				continue;
-			} else {
-				break;
-			}
-		}
-
-		/* double check in case we exited early */
-		if (last_section->VirtualAddress > data_dir->VirtualAddress ||
-		    section->VirtualAddress <= data_dir->VirtualAddress)
-			return false;
-
-		section = last_section;
-
-		/* get a pointer to the export directory */
-		PIMAGE_EXPORT_DIRECTORY export;
-		export = (PIMAGE_EXPORT_DIRECTORY)((byte *)base +
-						   data_dir->VirtualAddress -
-						   section->VirtualAddress +
-						   section->PointerToRawData);
-
-		if (export->NumberOfNames == 0)
-			return false;
-
-		/* get a pointer to the export directory names */
-		DWORD *names_ptr;
-		names_ptr = (DWORD *)((byte *)base + export->AddressOfNames -
-				      section->VirtualAddress +
-				      section->PointerToRawData);
-
-		/* iterate through each name and see if its an obs plugin */
-		CHAR *name;
-		size_t j;
-		for (j = 0; j < export->NumberOfNames; j++) {
-
-			name = (CHAR *)base + names_ptr[j] -
-			       section->VirtualAddress +
-			       section->PointerToRawData;
-
-			if (!strcmp(name, "obs_module_load")) {
-				return true;
-			}
-		}
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		/* we failed somehow, for compatibility let's assume it
-		 * was a valid plugin and let the loader deal with it */
-		return true;
-	}
-
-	return false;
-}
-
-void get_plugin_info(const char *path, bool *is_obs_plugin, bool *can_load)
+bool os_is_obs_plugin(const char *path)
 {
 	struct dstr dll_name;
 	wchar_t *wpath;
@@ -287,12 +147,12 @@ void get_plugin_info(const char *path, bool *is_obs_plugin, bool *can_load)
 
 	PIMAGE_DOS_HEADER dos_header;
 	PIMAGE_NT_HEADERS nt_headers;
+	PIMAGE_SECTION_HEADER section, last_section;
 
-	*is_obs_plugin = false;
-	*can_load = false;
+	bool ret = false;
 
 	if (!path)
-		return;
+		return false;
 
 	dstr_init_copy(&dll_name, path);
 	dstr_replace(&dll_name, "\\", "/");
@@ -333,21 +193,72 @@ void get_plugin_info(const char *path, bool *is_obs_plugin, bool *can_load)
 		if (nt_headers->Signature != IMAGE_NT_SIGNATURE)
 			goto cleanup;
 
-		*is_obs_plugin = has_obs_export(base, nt_headers);
+		PIMAGE_DATA_DIRECTORY data_dir;
+		data_dir =
+			&nt_headers->OptionalHeader
+				 .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
 
-#if OBS_QT_VERSION == 6
-		if (*is_obs_plugin) {
-			*can_load = !has_qt5_import(base, nt_headers);
+		if (data_dir->Size == 0)
+			goto cleanup;
+
+		section = IMAGE_FIRST_SECTION(nt_headers);
+		last_section = section;
+
+		/* find the section that contains the export directory */
+		int i;
+		for (i = 0; i < nt_headers->FileHeader.NumberOfSections; i++) {
+			if (section->VirtualAddress <=
+			    data_dir->VirtualAddress) {
+				last_section = section;
+				section++;
+				continue;
+			} else {
+				break;
+			}
 		}
-#else
-		*can_load = true;
-#endif
+
+		/* double check in case we exited early */
+		if (last_section->VirtualAddress > data_dir->VirtualAddress ||
+		    section->VirtualAddress <= data_dir->VirtualAddress)
+			goto cleanup;
+
+		section = last_section;
+
+		/* get a pointer to the export directory */
+		PIMAGE_EXPORT_DIRECTORY export;
+		export = (PIMAGE_EXPORT_DIRECTORY)((byte *)base +
+						   data_dir->VirtualAddress -
+						   section->VirtualAddress +
+						   section->PointerToRawData);
+
+		if (export->NumberOfNames == 0)
+			goto cleanup;
+
+		/* get a pointer to the export directory names */
+		DWORD *names_ptr;
+		names_ptr = (DWORD *)((byte *)base + export->AddressOfNames -
+				      section->VirtualAddress +
+				      section->PointerToRawData);
+
+		/* iterate through each name and see if its an obs plugin */
+		CHAR *name;
+		size_t j;
+		for (j = 0; j < export->NumberOfNames; j++) {
+
+			name = (CHAR *)base + names_ptr[j] -
+			       section->VirtualAddress +
+			       section->PointerToRawData;
+
+			if (!strcmp(name, "obs_module_load")) {
+				ret = true;
+				goto cleanup;
+			}
+		}
 
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		/* we failed somehow, for compatibility let's assume it
 		 * was a valid plugin and let the loader deal with it */
-		*is_obs_plugin = true;
-		*can_load = true;
+		ret = true;
 		goto cleanup;
 	}
 
@@ -360,16 +271,8 @@ cleanup:
 
 	if (hFile != INVALID_HANDLE_VALUE)
 		CloseHandle(hFile);
-}
 
-bool os_is_obs_plugin(const char *path)
-{
-	bool is_obs_plugin;
-	bool can_load;
-
-	get_plugin_info(path, &is_obs_plugin, &can_load);
-
-	return is_obs_plugin && can_load;
+	return ret;
 }
 
 union time_data {
@@ -455,24 +358,6 @@ bool os_sleepto_ns(uint64_t time_target)
 	}
 
 	return stall;
-}
-
-bool os_sleepto_ns_fast(uint64_t time_target)
-{
-	uint64_t current = os_gettime_ns();
-	if (time_target < current)
-		return false;
-
-	do {
-		uint64_t remain_ms = (time_target - current) / 1000000;
-		if (!remain_ms)
-			remain_ms = 1;
-		Sleep((DWORD)remain_ms);
-
-		current = os_gettime_ns();
-	} while (time_target > current);
-
-	return true;
 }
 
 void os_sleep_ms(uint32_t duration)
@@ -719,13 +604,11 @@ static void make_globent(struct os_globent *ent, WIN32_FIND_DATA *wfd,
 
 	dstr_from_wcs(&name, wfd->cFileName);
 	dstr_copy(&path, pattern);
-	if (path.array) {
-		slash = strrchr(path.array, '/');
-		if (slash)
-			dstr_resize(&path, slash + 1 - path.array);
-		else
-			dstr_free(&path);
-	}
+	slash = strrchr(path.array, '/');
+	if (slash)
+		dstr_resize(&path, slash + 1 - path.array);
+	else
+		dstr_free(&path);
 
 	dstr_cat_dstr(&path, &name);
 	ent->path = path.array;
@@ -962,7 +845,7 @@ char *os_getcwd(char *path, size_t size)
 	if (!len)
 		return NULL;
 
-	path_w = bmalloc(((size_t)len + 1) * sizeof(wchar_t));
+	path_w = bmalloc((len + 1) * sizeof(wchar_t));
 	GetCurrentDirectoryW(len + 1, path_w);
 	os_wcs_to_utf8(path_w, (size_t)len, path, size);
 	bfree(path_w);
@@ -1089,28 +972,6 @@ bool is_64_bit_windows(void)
 #endif
 }
 
-bool is_arm64_windows(void)
-{
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-	return true;
-#else
-	USHORT processMachine;
-	USHORT nativeMachine;
-	bool result = IsWow64Process2(GetCurrentProcess(), &processMachine,
-				      &nativeMachine);
-	return (result && (nativeMachine == IMAGE_FILE_MACHINE_ARM64));
-#endif
-}
-
-bool os_get_emulation_status(void)
-{
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-	return false;
-#else
-	return is_arm64_windows();
-#endif
-}
-
 void get_reg_dword(HKEY hkey, LPCWSTR sub_key, LPCWSTR value_name,
 		   struct reg_dword *info)
 {
@@ -1141,9 +1002,9 @@ void get_reg_dword(HKEY hkey, LPCWSTR sub_key, LPCWSTR value_name,
 
 static inline void rtl_get_ver(struct win_version_info *ver)
 {
+	RTL_OSVERSIONINFOEXW osver = {0};
 	HMODULE ntdll = GetModuleHandleW(L"ntdll");
-	if (!ntdll)
-		return;
+	NTSTATUS s;
 
 	NTSTATUS(WINAPI * get_ver)
 	(RTL_OSVERSIONINFOEXW *) =
@@ -1152,9 +1013,8 @@ static inline void rtl_get_ver(struct win_version_info *ver)
 		return;
 	}
 
-	RTL_OSVERSIONINFOEXW osver = {0};
 	osver.dwOSVersionInfoSize = sizeof(osver);
-	NTSTATUS s = get_ver(&osver);
+	s = get_ver(&osver);
 	if (s < 0) {
 		return;
 	}
@@ -1166,10 +1026,13 @@ static inline void rtl_get_ver(struct win_version_info *ver)
 }
 
 static inline bool get_reg_sz(HKEY key, const wchar_t *val, wchar_t *buf,
-			      DWORD size)
+			      const size_t size)
 {
-	const LSTATUS status =
-		RegGetValueW(key, NULL, val, RRF_RT_REG_SZ, NULL, buf, &size);
+	DWORD dwsize = (DWORD)size;
+	LSTATUS status;
+
+	status = RegQueryValueExW(key, val, NULL, NULL, (LPBYTE)buf, &dwsize);
+	buf[(size / sizeof(wchar_t)) - 1] = 0;
 	return status == ERROR_SUCCESS;
 }
 
@@ -1205,9 +1068,7 @@ static inline void get_reg_ver(struct win_version_info *ver)
 		ver->build = wcstol(str, NULL, 10);
 	}
 
-	const wchar_t *release_key = ver->build > 19041 ? L"DisplayVersion"
-							: L"ReleaseId";
-	if (get_reg_sz(key, release_key, str, sizeof(str))) {
+	if (get_reg_sz(key, L"ReleaseId", str, sizeof(str))) {
 		os_wcs_to_utf8(str, 0, win_release_id, MAX_SZ_LEN);
 	}
 
@@ -1358,27 +1219,23 @@ static void os_get_cores_internal(void)
 
 	info = malloc(len);
 
-	if (info) {
-		if (GetLogicalProcessorInformation(info, &len)) {
-			DWORD num = len / sizeof(*info);
-			temp = info;
+	if (GetLogicalProcessorInformation(info, &len)) {
+		DWORD num = len / sizeof(*info);
+		temp = info;
 
-			for (DWORD i = 0; i < num; i++) {
-				if (temp->Relationship ==
-				    RelationProcessorCore) {
-					ULONG_PTR mask = temp->ProcessorMask;
+		for (DWORD i = 0; i < num; i++) {
+			if (temp->Relationship == RelationProcessorCore) {
+				ULONG_PTR mask = temp->ProcessorMask;
 
-					physical_cores++;
-					logical_cores +=
-						num_logical_cores(mask);
-				}
-
-				temp++;
+				physical_cores++;
+				logical_cores += num_logical_cores(mask);
 			}
-		}
 
-		free(info);
+			temp++;
+		}
 	}
+
+	free(info);
 }
 
 int os_get_physical_cores(void)
@@ -1408,28 +1265,6 @@ uint64_t os_get_sys_free_size(void)
 	if (!os_get_sys_memory_usage_internal(&msex))
 		return 0;
 	return msex.ullAvailPhys;
-}
-
-static uint64_t total_memory = 0;
-static bool total_memory_initialized = false;
-
-static void os_get_sys_total_size_internal()
-{
-	total_memory_initialized = true;
-
-	MEMORYSTATUSEX msex = {sizeof(MEMORYSTATUSEX)};
-	if (!os_get_sys_memory_usage_internal(&msex))
-		return;
-
-	total_memory = msex.ullTotalPhys;
-}
-
-uint64_t os_get_sys_total_size(void)
-{
-	if (!total_memory_initialized)
-		os_get_sys_total_size_internal();
-
-	return total_memory;
 }
 
 static inline bool
@@ -1470,8 +1305,7 @@ uint64_t os_get_proc_virtual_size(void)
 uint64_t os_get_free_disk_space(const char *dir)
 {
 	wchar_t *wdir = NULL;
-	os_utf8_to_wcs_ptr(dir, 0, &wdir);
-	if (!wdir)
+	if (!os_utf8_to_wcs_ptr(dir, 0, &wdir))
 		return 0;
 
 	ULARGE_INTEGER free;
@@ -1479,22 +1313,4 @@ uint64_t os_get_free_disk_space(const char *dir)
 	bfree(wdir);
 
 	return success ? free.QuadPart : 0;
-}
-
-char *os_generate_uuid(void)
-{
-	UUID uuid;
-
-	RPC_STATUS res = UuidCreate(&uuid);
-	if (res != RPC_S_OK && res != RPC_S_UUID_LOCAL_ONLY)
-		bcrash("Failed to get UUID, RPC_STATUS: %l", res);
-
-	struct dstr uuid_str = {0};
-	dstr_printf(&uuid_str,
-		    "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-		    uuid.Data1, uuid.Data2, uuid.Data3, uuid.Data4[0],
-		    uuid.Data4[1], uuid.Data4[2], uuid.Data4[3], uuid.Data4[4],
-		    uuid.Data4[5], uuid.Data4[6], uuid.Data4[7]);
-
-	return uuid_str.array;
 }

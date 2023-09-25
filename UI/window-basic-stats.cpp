@@ -22,14 +22,12 @@ void OBSBasicStats::OBSFrontendEvent(enum obs_frontend_event event, void *ptr)
 {
 	OBSBasicStats *stats = reinterpret_cast<OBSBasicStats *>(ptr);
 
-	switch (event) {
+	switch ((int)event) {
 	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
 		stats->StartRecTimeLeft();
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
 		stats->ResetRecTimeLeft();
-		break;
-	default:
 		break;
 	}
 }
@@ -51,7 +49,7 @@ static QString MakeMissedFramesText(uint32_t total_lagged,
 }
 
 OBSBasicStats::OBSBasicStats(QWidget *parent, bool closeable)
-	: QFrame(parent),
+	: QWidget(parent),
 	  cpu_info(os_cpu_usage_info_start()),
 	  timer(this),
 	  recTimeLeft(this)
@@ -248,6 +246,13 @@ void OBSBasicStats::AddOutputLabels(QString name)
 	ol.droppedFrames = new QLabel(this);
 	ol.megabytesSent = new QLabel(this);
 	ol.bitrate = new QLabel(this);
+
+	int newPointSize = ol.status->font().pointSize();
+	newPointSize *= 13;
+	newPointSize /= 10;
+	QString qss =
+		QString("font-size: %1pt").arg(QString::number(newPointSize));
+	ol.status->setStyleSheet(qss);
 
 	int col = 0;
 	int row = outputLabels.size() + 1;
@@ -454,15 +459,9 @@ void OBSBasicStats::ResetRecTimeLeft()
 
 void OBSBasicStats::RecordingTimeLeft()
 {
-	if (bitrates.empty())
-		return;
-
 	long double averageBitrate =
 		accumulate(bitrates.begin(), bitrates.end(), 0.0) /
 		(long double)bitrates.size();
-	if (averageBitrate == 0)
-		return;
-
 	long double bytesPerSec = (averageBitrate / 8.0l) * 1000.0l;
 	long double secondsUntilFull = (long double)num_bytes / bytesPerSec;
 
